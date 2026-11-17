@@ -78,7 +78,7 @@ READY_DROP = [
     (span(171, 176), 'three-dot right pager: at most two right pages (Buffs, Food)'),
     (span(190, 193), 'attack and defence numbers on the corner cards: not read yet'),
     ({194}, 'view cone: no camera read'),
-    ({195, 197}, 'secondary-weapon condition arc and swap hint: the well carries Fuse, whose maximum is not read'),
+    ({197}, 'secondary-weapon swap hint: Tears of the Kingdom has no weapon swap (the well carries Fuse)'),
     ({198, 199}, 'arrow up/down hints: arrow selection is not offered'),
     (span(200, 202) | span(205, 207), 'left pager dots: one left page'),
     (span(218, 220), 'Quest command: no quest page yet (Inventory and Map are centred, spec C28)'),
@@ -331,6 +331,20 @@ def special(i, w):
         w['src_bind'] = 'totk.ready.effect.0.icon'
         w['src_hold'] = False
         return w
+    if i == 96:   # the fused material: TotK's material icons carry more padding than BotW's weapon icons, so the
+        # icon is cropped and enlarged to fill the well as BotW's does (its fuse-life number stays below it)
+        w['rect'] = [1094, 720, 76, 76]
+        w['src_rect'] = [0.12, 0.12, 0.88, 0.88]
+        w['src_hold'] = False
+        return w
+    if i == 195:   # the condition arc (owner C19: Fuse in BotW's frame and arc). The fused material's maximum fuse
+        # durability is not read (its actor pack has no LifeParameters), so the arc shows BotW's empty track only:
+        # no fill and no red until a maximum exists
+        for k in ('bind', 'src_names', 'hide_bind', 'keep_min', 'keep_max'):
+            w.pop(k, None)
+        w['src'] = 'file:assets/ready-native-secondary-condition-000.png'
+        w['need_bind'] = 'totk.ready.fuse.valid'
+        return w
     if i == 97:   # the empty Fuse well: the Fuse ability's mark, dimmed as Breath of the Wild's empty icons
         w['src'] = f'{M}icon/Obj_OneTouchBond'
         w['rect'] = [1100, 734, 64, 64]
@@ -509,21 +523,25 @@ MAX_ROWS = 300
 CELL_W, CELL_H, COLS = 196, 150, 6
 
 
-def wrong_build_cover():
-    """Breath of the Wild's wrong-build cover (Ready widgets 573-581), for the pages reached from Ready."""
-    g = {'need_bind': 'ui_wrong_build'}
-    return [rect(0, 0, 1240, 1080, PAGE, input_block=True, tap_block=True, **g),
-            image(*_xyxy(fit_logo([470, 34, 300, 214])), lyt('Logo_EN_L_Full_00^w'), **g),
-            label(620, 470, 'The Purah Pad cannot connect', 7, **g),
-            label(620, 660, 'Requires Tears of the Kingdom version 1.4.3', 5, **g),
-            label(620, 730, 'Your adventure continues on the main screen.', 5, **g)]
+# Breath of the Wild's Inventory and Map pages end with the same overlay block as its Ready page: the title,
+# loading and unknown-state covers, the wrong-build cover, the event dim and the pause-menu band (spec C33, C34,
+# C57-C60, C74). Ours are the Ready page's widgets, through the same rewrite table.
+OVERLAYS = span(295, 319) | span(573, 581) | span(587, 592)
 
 
-def _xyxy(r):
-    return r[0], r[1], r[0] + r[2], r[1] + r[3]
+def overlay_block(botw):
+    src = next(p for p in botw['pages'] if p['id'] == 'ready')['widgets']
+    out = []
+    for i in sorted(OVERLAYS - DROP):
+        w = rewrite_widget(src[i])
+        if w is None:
+            continue
+        w = special(i, w)
+        out.extend(w if isinstance(w, list) else [w])
+    return out
 
 
-def inventory_page():
+def inventory_page(botw):
     w = [rect(0, 0, 1240, 1080, PAGE)]
     for i, (name, icon) in enumerate(TABS):
         x = 16 + i * 134
@@ -564,18 +582,20 @@ def inventory_page():
     w.append({'type': 'label', 'rect': [40, 968, 1160, 0], 'bind_text': 'totk.inv.sel.caption', 'text_scale': 4,
               'color': MUTED, 'wrap_width': 1160, 'max_lines': 3, 'align': 'left', **ITALIC, **sel})
     w.append(label(620, 950, 'Tap an item to see it here', 5, MUTED, need_bind='totk.inv.sel.none'))
-    w += wrong_build_cover()
+    w += overlay_block(botw)
     scroll = {'id': 'inv_grid', 'rect': [x0, y0, 1208, 732], 'count_bind': 'totk.inv.count', 'row_h': CELL_H,
               'cols': COLS, 'reset_bind': '@flag:inv_tab', 'bar': '#80FFFCC6', 'bar_track': '#20FFFCC6'}
     return {'id': 'inventory', 'widgets': w, 'scrolls': [scroll]}
 
 
-def map_page():
+def map_page(botw):
     w = [rect(0, 0, 1240, 1080, '#FF000D17'),
          {'type': 'map', 'id': 'totk_map', 'area': 'TotkFull', 'rect': [0, 0, 1240, 1080], 'area_label': False,
           'pan_zoom': True, 'min_zoom': 1, 'max_zoom': 12, 'view_idle_ms': 0,
           'marker_x_bind': 'totk.map.x', 'marker_y_bind': 'totk.map.y', 'marker_src': lyt('Nt_MapPlayerIconNew_00^s'),
-          'marker_size': [64, 64], 'marker_rotate_bind': 'totk.map.heading', 'overlays': tiles('totk.map.tile')}]
+          # Breath of the Wild's full-map marker (its hyrule_map widget): 101 px, yellow
+          'marker_size': [101, 101], 'marker_tint': '#FFF5F506', 'marker_rotate_bind': 'totk.map.heading',
+          'overlays': tiles('totk.map.tile')}]
     w.append(label(620, 1032, 'Map unavailable in this area', 6, need_bind='!totk.map.valid'))
     buttons = [('Back', 'page_ready', None), ('Surface', 'map_layer_1', 'totk.map.page_layer_is.0'),
                ('Sky', 'map_layer_2', 'totk.map.page_layer_is.1'), ('Depths', 'map_layer_3', 'totk.map.page_layer_is.2'),
@@ -590,7 +610,7 @@ def map_page():
     w.append({'type': 'label', 'rect': [620, 1032, 460, 0], 'bind_text': 'totk.coords', 'text_scale': 4,
               'color': WHITE, 'align': 'center', 'italic': False, 'slant_deg': 0.0, 'text_role': 'numeral_readout',
               'need_bind': 'totk.map.valid'})
-    w += wrong_build_cover()
+    w += overlay_block(botw)
     return {'id': 'map', 'widgets': w}
 
 
@@ -773,7 +793,7 @@ def manifest(botw, keep_log):
     for w in loading['widgets']:
         if w.get('src', '').startswith(lyt('Logo_')):
             w['tint'] = '#FFADAC9B'
-    pages = [ready, inventory_page(), map_page(), mainmenu, loading]
+    pages = [ready, inventory_page(botw), map_page(botw), mainmenu, loading]
     world = {'min': [-6000, -5000], 'max': [6000, 5000], 'image': f'{M}gen/clear', 'no_pin': False}
     m = {
         'format': 1,

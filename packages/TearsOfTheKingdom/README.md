@@ -21,10 +21,12 @@ own empty state (`—`, `—°`, *Area unavailable*) or is left out (list below)
     stamina is not full or Link is out of breath;
   - dials: **Lights of Blessing** (top left), **shrines found** (top right), the sensor (bottom
     left: *Shrine*, *Lightroot* in the Depths), temperature (bottom right: no read yet, `—°`);
-  - corner cards: shield, bow, weapon (icon and durability bar, red at 20 % or less; *Breaking!*
-    on the weapon), the ability; the arrow well (arrow and count) under the bow; the **Fuse** well
-    (the fused material and its durability points) above the weapon, in Breath of the Wild's
-    secondary-weapon frame (owner decision C19);
+  - corner cards: shield, bow, weapon (icon and durability bar: the item's durability over its own
+    maximum, `MaxLife` in its actor pack, red at 20 % or less; *Breaking!* on the weapon; no bar
+    when an item has no maximum), the ability; the arrow well (arrow and count) under the bow; the
+    **Fuse** well (the fused material and its durability points) above the weapon, in Breath of the
+    Wild's secondary-weapon frame and arc (owner decision C19; the arc shows its empty track only,
+    because a material's maximum fuse durability is not read yet);
   - left pager: **Sages** in Breath of the Wild's Champions rows (one to five rows: icon, *On*,
     the recharge time, or *Off* when the sage is not with Link; the glow when ready); rupees under it;
   - right pane: the header names the layer (*Surface*, *Sky*, *Depths*; see below), then **Buffs**
@@ -38,8 +40,11 @@ own empty state (`—`, `—°`, *Area unavailable*) or is left out (list below)
     (*Choose your adventure on the main screen*, *Now loading...*, *The Purah Pad cannot connect /
     Requires Tears of the Kingdom version 1.4.3*).
 - **Inventory** (Tears of the Kingdom's own page, in Breath of the Wild's palette and art): the eight
-  categories as icon grids with counts (`x12`), durability and fused materials; a tap shows the
-  item's in-game name, description and facts.
+  categories as icon grids with counts (`x12`), durability bars and fused materials; a tap shows the
+  item's in-game name, description and facts (durability as a % of the item's maximum, C43).
+  Both pages end with the Ready page's overlay block: the pause-menu band (input blocked), the
+  cutscene dim and the title, loading, unknown and wrong-build covers. The Map page's marker is
+  Breath of the Wild's full-map one (101 px, yellow).
 - **Map**: the whole MainField map, pan and zoom, Surface / Sky / Depths or *Follow Link*,
   *Recenter*, and Link's coordinates (`X -254  Y +120  Z -1102`, spec C48).
 
@@ -66,7 +71,7 @@ is `totk.ready.fuse.*`.
 | `totk.ready.stamina.percent`, `.depleted` | `PlayerStatus.Stamina` / `MaxStamina`, `PlayerStatus.IsTired` (new, `totk_reader/totk_gamedata.c`) |
 | `totk.ready.shrine_count` | `DungeonState.Dungeon000..151` in Open, Enter or Clear (new, `totk_gamedata.c`) |
 | `totk.ready.lights` | the count of the key item `Obj_DungeonClearSeal` |
-| `totk.ready.shield`, `.bow`, `.weapon` (+ `.valid`, `.durability_pct`, `.low`) | the pouch: equipped item and its durability, scaled to the most durable item of its kind (the item's own maximum is not read) |
+| `totk.ready.shield`, `.bow`, `.weapon` (+ `.valid`, `.durability_pct`, `.low`) | the pouch: equipped item and its durability over its maximum (`MaxLife` in `Pack/Actor/<actor>.pack.zs`, `Life/LifeParameters/<actor>.game__life__LifeParameters.bgyml`); `-1` (no bar) when the pack has none |
 | `totk.ready.rune`, `.arrow`, `.arrow.count`, `.fuse`, `.fuse.life` | the ability, the arrows, the weapon's fused material |
 | `totk.ready.rupees.text` | `PlayerStatus.CurrentRupee`, grouped (`12,845`) |
 | `totk.ready.champion_slot.N.*`, `.champions.count` | the sages' companion flags |
@@ -99,7 +104,7 @@ Left out (`READY_DROP` in the generator), and why:
 | attack and defence numbers on the corner cards | not read yet |
 | area name, marker caption | no area read yet (*Area unavailable* shows) |
 | quick picker (Ready 320-571, 593-807, 864-989) and the corner and well taps | no item actions in a read-only module |
-| secondary condition arc and swap hint, arrow up/down hints | the Fuse well has no read maximum; Tears of the Kingdom has no weapon swap; arrow selection is not offered |
+| secondary swap hint, arrow up/down hints | Tears of the Kingdom has no weapon swap; arrow selection is not offered (the condition arc is kept, as its empty track: no maximum fuse durability is read) |
 | view cone, context caption, fx probe | Breath of the Wild-only reads |
 | cover frames (`state-native-frame`) | Breath of the Wild's conductor-frame art; Tears of the Kingdom has none |
 
@@ -160,7 +165,8 @@ Only on a desktop: Eden Duo's runtime built with this module linked in, against 
 food, Lights of Blessing, sages, position), reading the owner's own romfs files. Scenes checked
 against Breath of the Wild's render: in game (Surface, Sky, Depths), pause menu, cutscene, title
 screen, loading, low hearts (Food page, food card open and closed), another game version;
-Inventory with a selected item; the Map page.
+Inventory with a selected item; the Map page; the pause-menu band over Inventory and Map (a tap
+under it does not leave the page).
 
 ## Not yet
 
@@ -169,10 +175,13 @@ Inventory with a selected item; the Map page.
 - Reads: the time of day (then the clock in the header), temperature (dial and clothing card),
   quests (left pager, Quest page, quest marks, distance), map pins and stamps, an area name, the
   nearest shrine or Lightroot (compass card), the in-shrine state, attack and defence numbers,
-  each item's maximum durability, which effect a meal buff's id stands for (the Buffs row shows a
+  a fused material's maximum fuse durability (then the Fuse arc fills), which effect a meal buff's id stands for (the Buffs row shows a
   plain effect mark), a hearty meal's extra hearts.
 - On another game version the module does not load, so that cover has no logo and uses the host's
-  built-in font.
+  built-in font. Breath of the Wild's cover reads its font and logo through plain `romfs:` paths;
+  every Tears of the Kingdom file is zstd-compressed with a dictionary, so only the module can
+  decode them, and the host loads a module only on a build its `build_ids` lists (MODULE_GUIDE §3:
+  a module never implies support for an unlisted build).
 - Languages other than English (US) for item names and descriptions.
 - Item actions (need guest calls).
 

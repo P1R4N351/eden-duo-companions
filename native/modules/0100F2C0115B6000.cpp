@@ -174,6 +174,43 @@ bool LowHearts(int life, int max) { // the stick-LED rule of TotK Native (Bifros
     return max > 0 && life >= 0 && (life <= 4 || life * 4 <= max);
 }
 
+// A BYML (v7) document's root dictionary: the int value under `key` (the actor packs' parameter files).
+std::optional<int> BymlRootInt(const std::vector<u8>& d, std::string_view key) {
+    const auto at = [&](size_t o) -> std::optional<u32> {
+        if (o + 4 > d.size())
+            return std::nullopt;
+        u32 v;
+        std::memcpy(&v, d.data() + o, 4);
+        return v;
+    };
+    if (d.size() < 16 || d[0] != 'Y' || d[1] != 'B')
+        return std::nullopt;
+    const auto keys = at(4), root = at(12);
+    if (!keys || !root || *keys == 0 || *root == 0 || *keys >= d.size() || *root >= d.size() || d[*root] != 0xC1)
+        return std::nullopt;
+    const auto nkeys = at(*keys);
+    std::optional<u32> want;
+    for (u32 i = 0; nkeys && i < (*nkeys >> 8) && !want; ++i) {
+        const auto off = at(*keys + 4 + 4 * size_t{i});
+        if (!off || *keys + *off >= d.size())
+            return std::nullopt;
+        const char* str = reinterpret_cast<const char*>(d.data() + *keys + *off);
+        const size_t room = d.size() - (*keys + *off);
+        if (strnlen(str, room) == key.size() && std::memcmp(str, key.data(), key.size()) == 0)
+            want = i;
+    }
+    const auto n = at(*root);
+    for (u32 i = 0; want && n && i < (*n >> 8); ++i) {
+        const size_t e = *root + 4 + 8 * size_t{i};
+        const auto k = at(e), v = at(e + 4);
+        if (!k || !v)
+            return std::nullopt;
+        if ((*k & 0xFFFFFF) == *want)
+            return d[e + 3] == 0xD1 ? std::optional<int>{static_cast<int>(*v)} : std::nullopt;
+    }
+    return std::nullopt;
+}
+
 // ---------- the module ----------
 
 class Module {
@@ -236,6 +273,7 @@ private:
     }
     void PublishReady();
     void PublishGear(const char* slot, Cat cat);
+    int MaxLife(const std::string& actor);
     void PublishHeal();
     void PublishFx();
     void PublishMap();
@@ -268,7 +306,36 @@ private:
     std::optional<std::vector<u8>> combined; // Common layout archive's timg/__Combined.bntx
     bool combined_tried = false;
     std::optional<std::map<std::string, std::string>> tiles; // "<L>/<lod>/<c>_<r>" -> romfs path
+
+    // an item's maximum durability (the actor pack's MaxLife), -1 when it has none; sample thread only
+    std::unordered_map<std::string, int> max_life;
 };
+
+// The item's maximum durability: MaxLife in its actor pack's Life/LifeParameters/<actor> file (weapons, bows,
+// shields). Read once per actor, on the sample thread (a few KiB each); -1 when the pack has none.
+int Module::MaxLife(const std::string& actor) {
+    if (actor.empty())
+        return -1;
+    if (const auto it = max_life.find(actor); it != max_life.end())
+        return it->second;
+    int v = -1;
+    if (const auto pack = romfs->Read("Pack/Actor/" + actor + ".pack.zs")) {
+        auto file = WonderAssets::SarcMember(*pack, "Life/LifeParameters/" + actor + ".game__life__LifeParameters.bgyml");
+        if (!file) { // a shared parameter file: used only when it is the pack's one LifeParameters file
+            int found = 0;
+            for (const auto& name : WonderAssets::SarcNames(*pack))
+                if (name.starts_with("Life/LifeParameters/") && ++found == 1)
+                    file = WonderAssets::SarcMember(*pack, name);
+            if (found != 1)
+                file.reset();
+        }
+        if (file)
+            if (const auto m = BymlRootInt(*file, "MaxLife"); m && *m > 0)
+                v = *m;
+    }
+    max_life.emplace(actor, v);
+    return v;
+}
 
 void Module::LoadText() {
     // The English text archive; its name carries a data version (Mals/USen.Product.142.sarc.zs on
@@ -475,14 +542,11 @@ void Module::PublishGear(const char* slot, Cat cat) {
         return;
     }
     const Item& it = list[i];
-    // The item's own maximum durability is not read: the bar is scaled to the most durable item of the same kind
-    // in the pouch (the same scale TotK Native's page used).
-    int scale = 1;
-    for (const auto& o : list)
-        scale = std::max(scale, o.life == INT32_MIN ? 0 : o.life);
+    // the bar is the item's durability over its own maximum (spec C14); with no maximum read, no bar and no red
+    const int max = MaxLife(it.actor);
     Text(p, std::string{Prefix} + "icon/" + it.actor);
-    const bool known = it.life != INT32_MIN;
-    const int pct = known ? std::clamp(static_cast<int>(std::lround(100.0 * std::max(0, it.life) / scale)), 0, 100) : -1;
+    const bool known = it.life != INT32_MIN && max > 0;
+    const int pct = known ? std::clamp(static_cast<int>(std::lround(100.0 * std::max(0, it.life) / max)), 0, 100) : -1;
     I64(p + ".durability_pct", pct);
     I64(p + ".low", known && pct <= 20);
 }
@@ -518,8 +582,9 @@ void Module::PublishReady() {
         Text("totk.ready.arrow", std::string{Prefix} + "icon/" + arrows[a].actor);
         I64("totk.ready.arrow.count", std::max(0, arrows[a].count));
     }
-    // Fuse (owner: in Breath of the Wild's secondary-weapon well): the material fused to the equipped weapon and
-    // its durability points.
+    // Fuse (owner: in Breath of the Wild's secondary-weapon well and arc): the material fused to the equipped weapon
+    // and its durability points. The material's maximum fuse durability is not read (its actor pack has no
+    // LifeParameters), so the page draws the arc's empty track only.
     const auto& weapons = model.pouch[Weapons];
     const int w = Equipped(weapons);
     const bool fused = w >= 0 && !weapons[w].fuse.empty();
@@ -713,22 +778,20 @@ void Module::PublishInventory() {
                     rows.emplace_back(cat, &it);
     I64("totk.inv.count", static_cast<s64>(rows.size()));
     I64("totk.inv.empty", rows.empty());
-    std::array<int, CatCount> scale{};
-    for (int c = 0; c < CatCount; ++c)
-        for (const auto& it : model.pouch[c])
-            scale[c] = std::max(scale[c], it.life == INT32_MIN ? 0 : it.life);
     for (size_t i = 0; i < rows.size(); ++i) {
-        const auto& [cat, it] = rows[i];
+        const Item* it = rows[i].second;
         const std::string p = "totk.inv." + std::to_string(i);
         I64(p + ".on", 1);
         Text(p + ".icon", std::string{Prefix} + "icon/" + it->actor);
         Text(p + ".name", ItemName(it->actor));
         I64(p + ".equipped", it->equipped);
-        const bool life = it->life != INT32_MIN && it->count == INT32_MIN;
+        // durability over the item's own maximum; no bar when the maximum is not known
+        const int max = it->life != INT32_MIN && it->count == INT32_MIN ? MaxLife(it->actor) : -1;
+        const bool life = max > 0;
         I64(p + ".has_life", life);
-        I64(p + ".life", life ? std::max(0, it->life) : 0);
-        I64(p + ".life_max", std::max(1, scale[cat]));
-        I64(p + ".life_low", life && it->life < 5);
+        I64(p + ".life", life ? std::min(std::max(0, it->life), max) : 0);
+        I64(p + ".life_max", life ? max : 1);
+        I64(p + ".life_low", life && it->life * 5 <= max);
         Text(p + ".qty", it->count != INT32_MIN && it->count > 1 ? "x" + std::to_string(it->count) : ""); // C41
         I64(p + ".fused", !it->fuse.empty());
         if (!it->fuse.empty())
@@ -753,8 +816,12 @@ void Module::PublishInventory() {
         Text("totk.inv.sel.name", ItemName(it.actor));
         Text("totk.inv.sel.caption", ItemCaption(it.actor));
         std::string facts;
-        if (it.life != INT32_MIN && it.count == INT32_MIN)
-            facts += "Durability " + std::to_string(it.life);
+        if (it.life != INT32_MIN && it.count == INT32_MIN) { // C43: as a % of the item's maximum when it is known
+            const int max = MaxLife(it.actor);
+            facts += max > 0 ? "Durability " +
+                                   std::to_string(std::clamp(static_cast<int>(std::lround(100.0 * std::max(0, it.life) / max)), 0, 100)) + "%"
+                             : "Durability " + std::to_string(it.life);
+        }
         if (!it.fuse.empty())
             facts += (facts.empty() ? "" : "   ") + std::string{"Fused: "} + ItemName(it.fuse) +
                      (it.fuse_life != INT32_MIN ? " (" + std::to_string(it.fuse_life) + ")" : "");

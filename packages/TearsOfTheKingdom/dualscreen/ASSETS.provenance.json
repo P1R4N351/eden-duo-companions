@@ -62,6 +62,11 @@
    "source": "tools/add-ready-layout.py, migrate-native-ready.py -- ImageDraw outlines (restyle whitens: alpha kept)",
    "copied_from": "packages/BreathOfTheWild/dualscreen/assets/ready-native-circle-frame.png at 54ab4e2bb76a702be743049be3c256f7344c0147"
   },
+  "assets/ready-native-secondary-condition-000.png": {
+   "origin": "generated",
+   "source": "tools/migrate-native-ready.py -- ImageDraw arc gauge frames (restyle recolours exact pixels)",
+   "copied_from": "packages/BreathOfTheWild/dualscreen/assets/ready-native-secondary-condition-000.png at 54ab4e2bb76a702be743049be3c256f7344c0147"
+  },
   "assets/ready-native-secondary-frame.png": {
    "origin": "generated",
    "source": "tools/add-ready-layout.py, migrate-native-ready.py -- ImageDraw outlines (restyle whitens: alpha kept)",
