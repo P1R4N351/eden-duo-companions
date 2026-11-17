@@ -245,6 +245,33 @@ if (NOT ANDROID)
         "${EDEN_SOURCE_ROOT}/externals/bc_decoder" "${WONDER_ZSTD_LIB}")
 endif()
 
+# The Legend of Zelda: Tears of the Kingdom 1.4.3: read-only. Game state through TotK Native's MIT
+# reader (totk_reader/, compiled unchanged); art and the Rodin font decoded from the player's romfs
+# (zstd frames with the ZsDic dictionaries -> SARC -> BNTX / bfotf) with Wonder's decoders.
+set(TOTK_SOURCES
+    0100F2C0115B6000.cpp
+    totk_romfs.cpp
+    totk_romfs.h
+    totk_reader/companion.h
+    totk_reader/companion_state.h
+    totk_reader/game_version.h
+    totk_reader/companion_snapshot.c
+    totk_reader/totk_reader_ro.c
+    totk_reader/totk_reader_ro.h
+    wonder_assets.cpp
+    wonder_assets.h
+    wonder_font.cpp
+    wonder_font.h
+    third_party/stb_truetype.h
+    "${EDEN_SOURCE_ROOT}/externals/bc_decoder/bc_decoder.cpp"
+    ${WONDER_ZSTD_SOURCES})
+dsmod_add_module(dsmod-totk EXCLUDE_FROM_ALL
+    TITLE 0100F2C0115B6000
+    SOURCES ${TOTK_SOURCES}
+    EXPORTS eden_dsmod_get_module eden_dsmod_get_extensions eden_dsmod_get_font_extensions
+    INCLUDE_DIRECTORIES "${EDEN_NLOHMANN_JSON_INCLUDE_DIR}" "${EDEN_SOURCE_ROOT}/externals/bc_decoder"
+        "${WONDER_ZSTD_LIB}")
+
 # P5R: the ABI glue (01005CA01580E000.cpp) plus the Reader's area files (p5r_reader.h lists them).
 set(P5R_READER_SOURCES
     01005CA01580E000.cpp

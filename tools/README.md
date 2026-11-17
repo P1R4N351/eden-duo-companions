@@ -16,6 +16,7 @@
 | `ctr/` | Crash Team Racing Nitro-Fueled page generator. |
 | `dq3/` | Dragon Quest III HD-2D Remake page and guest load-plan generators, with the load-plan test. |
 | `chained-echoes/` | Chained Echoes page generator. |
+| `totk/` | Tears of the Kingdom page generator (`gen_manifest.py`) and map-tile table (`gen_map_tiles.py`). See [`../packages/TearsOfTheKingdom/README.md`](../packages/TearsOfTheKingdom/README.md). |
 
 ## Requirements
 
@@ -25,7 +26,7 @@
 - `llvm-strip`, for `p5r/build_pkg_af.sh`.
 - `sha256sum`, `mktemp` and bash, for the shell scripts.
 
-`build_dualscreen_package.py`, `compact_zip.py`, `build_release.sh`, `mk8d/gen_manifest.py`, `wonder/gen_manifest.py` and `p3p/gen_manifest.py` need only the Python standard library.
+`build_dualscreen_package.py`, `compact_zip.py`, `build_release.sh`, `mk8d/gen_manifest.py`, `wonder/gen_manifest.py`, `totk/gen_manifest.py`, `totk/gen_map_tiles.py` and `p3p/gen_manifest.py` need only the Python standard library.
 
 ## Building the release archives
 
