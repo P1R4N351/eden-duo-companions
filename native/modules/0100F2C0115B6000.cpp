@@ -5,8 +5,11 @@
 //
 // Game state comes from TotK Native's companion reader (totk_reader/, MIT, compiled unchanged):
 // GameData flag tables and the player actor, read through host->read_memory with code guards
-// that fail closed on any other build. The module turns its JSON snapshot into page values
-// (totk.*); nothing in the game is written or called. Item actions are not offered: TotK Native
+// that fail closed on any other build, plus totk_reader/totk_gamedata.c (MIT) for the values the
+// snapshot does not report (current stamina, shrines found). The module turns them into page
+// values (totk.*); nothing in the game is written or called. The Ready page is Breath of the
+// Wild's (tools/totk/gen_manifest.py derives it), so its values carry Breath of the Wild's names
+// with totk. in front: botw.ready.shield -> totk.ready.shield, and so on. Item actions are not offered: TotK Native
 // performs them with guest calls, which Eden Duo does not provide on Android.
 //
 // Art and text are decoded from the player's romfs on request (module:totk:<key>, see
@@ -17,6 +20,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -39,6 +43,7 @@
 extern "C" {
 #include "totk_reader/companion.h" // TotK Native's C header, kept as it is there
 }
+#include "totk_reader/totk_gamedata.h"
 #include "totk_reader/totk_reader_ro.h"
 #include "totk_romfs.h"
 #include "wonder_assets.h"
@@ -54,9 +59,12 @@ constexpr std::string_view BuildId = "277178B7DBA1B6D4949A84778D4ABC58"; // 1.4.
 constexpr std::string_view Prefix = "module:totk:";
 constexpr int LiveEvery = 6;   // ticks between live snapshots (10 Hz)
 constexpr int FullEvery = 30;  // ticks between full snapshots (inventory, sages, map marks: 2 Hz)
-constexpr int MaxHearts = 60;
 constexpr int MaxRows = 300;
 constexpr int Cols = 12, Rows = 10;
+// The Ready page's right-pane header: the time of day on the Surface and in the Sky once a clock read exists
+// (ClockText), the layer name otherwise and always in the Depths. Set to true when ClockText returns the time.
+constexpr bool HeaderShowsClock = false;
+std::optional<std::string> ClockText() { return std::nullopt; } // no time-of-day read yet ("03:05 PM" when there is)
 
 // companion_snapshot reads guest memory through a plain function pointer: the host table of the
 // callback that is running it.
@@ -102,7 +110,6 @@ constexpr std::array<std::array<int, 2>, TabCount> Tabs{{{Weapons, -1}, {Bows, A
                                                          {Armor, -1}, {Materials, -1}, {Food, -1},
                                                          {Zonai, -1}, {KeyItems, -1}}};
 constexpr std::array<const char*, 5> SageIds{"Wind", "Fire", "Water", "Electric", "Soul"};
-constexpr std::array<const char*, 5> SageActors{"Rito", "Goron", "Zora", "Gerudo", "Zonau"};
 
 struct Item {
     std::string actor, fuse, effect;
@@ -123,6 +130,10 @@ struct Model {
     bool have_pouch = false;
     std::array<Sage, 5> sages;
     bool have_sages = false;
+    CompanionState common{};          // life, max life (quarter hearts, -1 unknown), from companion_state
+    TotkGameData gamedata{};          // stamina (every read)
+    bool shrines_ok = false;          // shrines found (full reads only)
+    int shrines_found = 0;
 };
 
 int Int(const json& o, const char* key, int fallback = INT32_MIN) {
@@ -146,15 +157,6 @@ std::string Hearts(int quarters) {
     if (q / 4 == 0 && q % 4 != 0)
         return Parts[q % 4];
     return std::to_string(q / 4) + Parts[q % 4];
-}
-std::string Wheels(double units) {
-    const double v = std::max(0.0, units) / 1000;
-    char b[32];
-    if (v == std::rint(v))
-        std::snprintf(b, sizeof b, "%lld", static_cast<long long>(v));
-    else
-        std::snprintf(b, sizeof b, "%.1f", v);
-    return b;
 }
 std::string Duration(int seconds) {
     if (seconds < 0)
@@ -234,14 +236,14 @@ private:
     }
     void PublishReady();
     void PublishGear(const char* slot, Cat cat);
-    void PublishHearts();
+    void PublishHeal();
+    void PublishFx();
     void PublishMap();
     void PublishInventory();
 
     std::optional<WonderAssets::Image> Layout(std::string_view texture);
     std::optional<WonderAssets::Image> Icon(std::string_view actor);
     std::optional<WonderAssets::Image> MapTile(std::string_view key);
-    std::optional<WonderAssets::Image> Heart(std::string_view code);
     std::optional<WonderAssets::Image> Generated(std::string_view key);
 
     EdenDsmodHostApi host;
@@ -302,6 +304,7 @@ std::string Module::ItemCaption(const std::string& actor) const {
 void Module::Read(bool full) {
     const uintptr_t main = static_cast<uintptr_t>(host.main_base);
     totk_reader_refresh(main, GuestRead, &state);
+    companion_state(main, GuestRead, &model.common);
     if (companion_snapshot(main, full ? COMPANION_FULL : COMPANION_LIVE, GuestRead, &buf) == 0)
         return;
     const json root = json::parse(std::string_view{buf.data, buf.len}, nullptr, false);
@@ -310,6 +313,8 @@ void Module::Read(bool full) {
     model.status = Str(root, "status");
     if (model.status != "ready") {
         model.player = json::object();
+        model.gamedata = {};
+        model.shrines_ok = false;
         if (model.status != "starting") { // keep the pouch across a moment of "starting" only
             model.have_pouch = model.have_sages = false;
             for (auto& c : model.pouch)
@@ -320,6 +325,12 @@ void Module::Read(bool full) {
         return;
     }
     model.player = root.value("player", json::object());
+    // after a "ready" snapshot: the code guard has passed for this main
+    totk_gamedata_read(main, GuestRead, full, &model.gamedata);
+    if (full) {
+        model.shrines_ok = model.gamedata.shrines_ok;
+        model.shrines_found = model.gamedata.shrines_found;
+    }
     const json action = root.value("actionState", json::object());
     model.reason = Str(action, "reason");
     model.pause_menu = action.value("pauseMenu", false);
@@ -386,166 +397,261 @@ void Module::Publish() {
                                            : "Waiting for the game");
     const bool event = status == 5 && model.reason == "event";
     const bool menu = status == 5 && !event && model.pause_menu;
+    const bool loading = status == 1 || (status == 5 && (model.reason == "loading" || model.reason == "noPlayer"));
     I64("totk.event", event);
     I64("totk.menu", menu);
     I64("totk.dim", event || menu);
     I64("totk.text_ready", text_ready.load());
+
+    // The page the second screen shows, as Breath of the Wild's package numbers them (0 Ready, 1 the title's
+    // main-menu page, 2 Loading); another build keeps the Ready page, whose cover says so.
+    I64("totk.state.page", status == 3 ? 1 : loading ? 2 : 0);
+    I64("totk.state.title", status == 3);
+    I64("totk.state.loading", loading);
+    I64("totk.state.unsupported", status == 2);
+    I64("totk.state.dim", event);
+    // The common second-screen state words (companion_state.h): -1 while they are not known.
+    I64("totk.state.menu_open", status == 5 ? (menu ? 1 : 0) : -1);
+    I64("totk.state.life", status == 5 && model.common.life >= 0 ? model.common.life : -1);
+    I64("totk.state.max_life", status == 5 && model.common.max_life >= 0 ? model.common.max_life : -1);
+    PublishFx();
     if (status != 5)
         return;
     PublishReady();
-    PublishHearts();
     PublishMap();
     PublishInventory();
 }
 
+// The loading page's twelve-dot spinner: Breath of the Wild's native loop shape (dots 0.5 -> 1 -> 0.5 every 20 UI
+// frames at 30 fps, odd arms half a cycle later; the faint halos the same plus 1.0), as scale x 1000.
+void Module::PublishFx() {
+    const double f = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count() * 30;
+    for (int k = 0; k < 12; ++k) {
+        const double ph = std::fmod(f + (k % 2 ? 10.0 : 0.0), 20.0) / 20.0;
+        const double v = 0.75 - 0.25 * std::cos(2 * M_PI * ph) + (k >= 6 ? 1.0 : 0.0);
+        I64("totk.fx.spin." + std::to_string(k), std::lround(v * 1000));
+    }
+}
+
+namespace {
+std::string Grouped(long long v) { // 12,845
+    std::string d = std::to_string(v < 0 ? -v : v), out;
+    for (size_t i = 0; i < d.size(); ++i) {
+        if (i && (d.size() - i) % 3 == 0)
+            out += ',';
+        out += d[i];
+    }
+    return v < 0 ? "-" + out : out;
+}
+std::string Clock(int seconds) { // m:ss, as the buff times on Breath of the Wild's page
+    if (seconds < 0)
+        seconds = 0;
+    char b[32];
+    std::snprintf(b, sizeof b, "%d:%02d", seconds / 60, seconds % 60);
+    return b;
+}
+// A food effect's short label on the food card, for the effects whose name says what they do.
+const char* FoodEffectLabel(const std::string& e) {
+    static const std::map<std::string, const char*> Labels{
+        {"AttackUp", "Attack up"},         {"DefenseUp", "Defense up"},     {"AllSpeed", "Speed up"},
+        {"QuietnessUp", "Stealth up"},     {"ResistHot", "Heat resistance"}, {"ResistCold", "Cold resistance"},
+        {"ResistBurn", "Flame guard"},     {"ResistElectric", "Shock resistance"},
+        {"StaminaRecover", "Stamina"},     {"ExStaminaMaxUp", "Extra stamina"}, {"LightEmission", "Glow"},
+        {"NotSlippy", "Slip resistance"},  {"MiasmaGuard", "Gloom resistance"}, {"LifeRepair", "Gloom recovery"}};
+    const auto it = Labels.find(e);
+    return it != Labels.end() ? it->second : nullptr;
+}
+} // namespace
+
+// The Ready page's gear corners and wells, named as Breath of the Wild's (botw.ready.* -> totk.ready.*).
 void Module::PublishGear(const char* slot, Cat cat) {
     const auto& list = model.pouch[cat];
     const int i = Equipped(list);
-    const std::string p = std::string{"totk.gear."} + slot;
-    I64(p + ".has", i >= 0);
-    I64(p + ".none", i < 0);
-    if (i < 0)
+    const std::string p = std::string{"totk.ready."} + slot;
+    I64(p + ".valid", i >= 0);
+    if (i < 0) {
+        I64(p + ".durability_pct", -1);
+        I64(p + ".low", 0);
         return;
+    }
     const Item& it = list[i];
+    // The item's own maximum durability is not read: the bar is scaled to the most durable item of the same kind
+    // in the pouch (the same scale TotK Native's page used).
     int scale = 1;
     for (const auto& o : list)
         scale = std::max(scale, o.life == INT32_MIN ? 0 : o.life);
-    Text(p + ".icon", std::string{Prefix} + "icon/" + it.actor);
-    Text(p + ".name", ItemName(it.actor));
+    Text(p, std::string{Prefix} + "icon/" + it.actor);
     const bool known = it.life != INT32_MIN;
-    I64(p + ".life_known", known);
-    I64(p + ".life", known ? std::max(0, it.life) : 0);
-    I64(p + ".life_max", scale);
-    I64(p + ".breaking", known && it.life < 5);
-    I64(p + ".ok", !(known && it.life < 5));
+    const int pct = known ? std::clamp(static_cast<int>(std::lround(100.0 * std::max(0, it.life) / scale)), 0, 100) : -1;
+    I64(p + ".durability_pct", pct);
+    I64(p + ".low", known && pct <= 20);
 }
 
 void Module::PublishReady() {
     const json& pl = model.player;
     const auto has = [&](const char* k) { return pl.contains(k); };
-    I64("totk.rupees", Int(pl, "rupees", 0));
-    I64("totk.poes", Int(pl, "poes", 0));
-    Text("totk.poes_text", has("poes") ? std::to_string(Int(pl, "poes", 0)) : "\xE2\x80\x94");
-    Text("totk.stamina", has("maxStamina") ? Wheels(Num(pl, "maxStamina")) : "\xE2\x80\x94");
-    Text("totk.stamina_extra", Num(pl, "extraStamina", 0) > 0 ? "+" + Wheels(Num(pl, "extraStamina")) : "");
-    Text("totk.energy", has("maxEnergy") ? Wheels(Num(pl, "maxEnergy")) : "\xE2\x80\x94");
-    Text("totk.energy_extra", Num(pl, "extraEnergy", 0) > 0 ? "+" + Wheels(Num(pl, "extraEnergy")) : "");
 
-    // ability (bottom-left card)
+    // rupees, bottom left
+    I64("totk.ready.rupees.valid", has("rupees"));
+    Text("totk.ready.rupees.text", has("rupees") ? Grouped(Int(pl, "rupees", 0)) : "");
+
+    // the three gear corners, the ability corner, the arrow well and the Fuse well
+    PublishGear("weapon", Weapons);
+    PublishGear("bow", Bows);
+    PublishGear("shield", Shields);
     static const std::map<std::string, std::string> AbilityActor{
         {"UltraHand", "Obj_UltraHand"},       {"OneTouchBond", "Obj_OneTouchBond"},
         {"CeilingClipper", "Obj_Tooreroof"},  {"ReverseRecorder", "Obj_ReverseRecorder"},
         {"AutoBuilder", "Obj_AutoBuilder"}};
-    const std::string ability = Str(pl, "ability");
-    const auto ab = AbilityActor.find(ability);
-    I64("totk.ability.has", ab != AbilityActor.end());
-    if (ab != AbilityActor.end()) {
-        Text("totk.ability.icon", std::string{Prefix} + "icon/" + ab->second);
-        Text("totk.ability.name", ItemName(ab->second));
-    }
+    const auto ab = AbilityActor.find(Str(pl, "ability"));
+    I64("totk.ready.rune.valid", ab != AbilityActor.end());
+    if (ab != AbilityActor.end())
+        Text("totk.ready.rune", std::string{Prefix} + "icon/" + ab->second);
 
-    PublishGear("weapon", Weapons);
-    PublishGear("bow", Bows);
-    PublishGear("shield", Shields);
-
-    // arrows under the bow
     const auto& arrows = model.pouch[Arrows];
     int a = Equipped(arrows);
     if (a < 0 && !arrows.empty())
         a = 0;
-    I64("totk.arrow.has", a >= 0);
-    I64("totk.arrow.none", a < 0);
+    I64("totk.ready.arrow.valid", a >= 0);
+    I64("totk.ready.arrow.count.valid", a >= 0 && arrows[a].count != INT32_MIN);
     if (a >= 0) {
-        Text("totk.arrow.icon", std::string{Prefix} + "icon/" + arrows[a].actor);
-        Text("totk.arrow.count", "\xC3\x97" + std::to_string(std::max(0, arrows[a].count))); // ×
+        Text("totk.ready.arrow", std::string{Prefix} + "icon/" + arrows[a].actor);
+        I64("totk.ready.arrow.count", std::max(0, arrows[a].count));
     }
-    // the weapon's fused material above the weapon
+    // Fuse (owner: in Breath of the Wild's secondary-weapon well): the material fused to the equipped weapon and
+    // its durability points.
     const auto& weapons = model.pouch[Weapons];
     const int w = Equipped(weapons);
     const bool fused = w >= 0 && !weapons[w].fuse.empty();
-    I64("totk.fuse.has", fused);
-    I64("totk.fuse.none", !fused);
-    if (fused) {
-        Text("totk.fuse.icon", std::string{Prefix} + "icon/" + weapons[w].fuse);
-        Text("totk.fuse.life", weapons[w].fuse_life == INT32_MIN ? "" : std::to_string(weapons[w].fuse_life));
-    }
+    I64("totk.ready.fuse.valid", fused);
+    I64("totk.ready.fuse.life", fused && weapons[w].fuse_life != INT32_MIN ? std::max(0, weapons[w].fuse_life) : -1);
+    if (fused)
+        Text("totk.ready.fuse", std::string{Prefix} + "icon/" + weapons[w].fuse);
 
-    // armor pane: the three worn pieces
-    int shown = 0;
-    for (const auto& it : model.pouch[Armor]) {
-        if (!it.equipped || shown >= 3)
-            continue;
-        Text("totk.armor." + std::to_string(shown) + ".icon", std::string{Prefix} + "icon/" + it.actor);
-        I64("totk.armor." + std::to_string(shown) + ".on", 1);
-        ++shown;
-    }
-    I64("totk.armor.none", shown == 0);
+    // dials: Lights of Blessing (top left), shrines found (top right), the sensor (bottom left); temperature
+    // (bottom right) has no read yet and shows its empty state
+    int lights = 0;
+    for (const auto& it : model.pouch[KeyItems])
+        if (it.actor == "Obj_DungeonClearSeal")
+            lights += std::max(0, it.count == INT32_MIN ? 1 : it.count);
+    I64("totk.ready.lights.valid", model.have_pouch);
+    I64("totk.ready.lights", lights);
+    I64("totk.ready.shrine_count.valid", model.shrines_ok);
+    I64("totk.ready.shrine_count", model.shrines_found);
 
-    // meal pane
-    const json buff = pl.value("cookBuff", json::object());
-    const bool meal = buff.contains("id") || buff.contains("type");
-    I64("totk.meal.has", meal);
-    I64("totk.meal.none", !meal);
-    if (meal)
-        Text("totk.meal.text", "Lv " + std::to_string(Int(buff, "level", 0)) + " \xC2\xB7 " +
-                                   Duration(Int(buff, "time", 0)));
-
-    // sages pane
-    for (size_t i = 0; i < SageIds.size(); ++i) {
-        const Sage& sg = model.sages[i];
-        const std::string p = "totk.sage." + std::to_string(i);
-        I64(p + ".joined", sg.joined);
-        I64(p + ".away", !sg.joined);
-        const int cd = static_cast<int>(std::lround(sg.cooldown));
-        Text(p + ".status", !sg.joined ? "\xE2\x80\x94" : cd > 0 ? std::to_string(cd) + "s"
-                                      : sg.summoned ? "With you" : "Away");
-        I64(p + ".tone", !sg.joined ? 0 : cd > 0 ? 2 : sg.summoned ? 3 : 1);
-    }
-
-    // where Link is
-    const auto pos = pl.find("pos");
-    if (pos != pl.end() && pos->is_array() && pos->size() == 3) {
-        char b[64];
-        std::snprintf(b, sizeof b, "%+.0f  %+.0f  %+.0f", (*pos)[0].get<double>(), (*pos)[1].get<double>(),
-                      (*pos)[2].get<double>());
-        Text("totk.coords", b);
-    } else {
-        Text("totk.coords", "Position unavailable");
-    }
     const std::string layer = Str(pl, "layer");
     const int li = layer == "Sky" ? 1 : layer == "UnderGround" ? 2 : 0;
+    I64("totk.ready.sensor.ring_palette.0", 0);
+    Text("totk.ready.sensor.art.0", std::string{Prefix} + "lyt/SeekSensor_00^s");
+    Text("totk.ready.sensor.text", li == 2 ? "Lightroot" : "Shrine");
+
+    // The right pane's header (owner 2026-11-17): the layer name while Link is in the Depths; on the Surface and
+    // in the Sky the time of day, like Breath of the Wild's clock. There is no time-of-day read yet, so until one
+    // exists HeaderShowsClock stays false and the header names the layer everywhere.
+    static constexpr const char* LayerNames[] = {"Surface", "Sky", "Depths"};
+    const std::optional<std::string> clock = HeaderShowsClock && li != 2 ? ClockText() : std::nullopt;
+    I64("totk.ready.header.valid", 1);
+    Text("totk.ready.header.text", clock ? *clock : LayerNames[li]);
     I64("totk.layer", li);
-    Text("totk.layer_text", li == 1 ? "Sky" : li == 2 ? "Depths" : "Surface");
-    I64("totk.depths", li == 2);
-    I64("totk.surface_or_sky", li != 2);
+
+    // the stamina ring round the disc: current stamina while it is not full or Link is out of breath
+    const bool st = model.gamedata.stamina_ok;
+    const double pct = st ? 100.0 * model.gamedata.stamina / model.gamedata.max_stamina : 0;
+    I64("totk.ready.stamina.valid", st);
+    I64("totk.ready.stamina.percent", st ? std::clamp(static_cast<int>(pct), 0, 100) : -1);
+    I64("totk.ready.stamina.depleted",
+        st && (model.gamedata.stamina < model.gamedata.max_stamina - 0.5f || (model.gamedata.tired_ok && model.gamedata.tired)));
+
+    // Buffs: TotK has one meal effect at a time. Which effect its id stands for is not read yet, so the row
+    // shows a plain effect mark and the time left.
+    const json buff = pl.value("cookBuff", json::object());
+    const bool meal = buff.contains("id") && Int(buff, "time", 0) > 0;
+    I64("totk.ready.effects.count", meal ? 1 : 0);
+    I64("totk.ready.effect.0.kind", meal ? 0 : -1);
+    if (meal) {
+        Text("totk.ready.effect.0.icon", std::string{Prefix} + "lyt/BonusIcon72_NoMark_00^s");
+        Text("totk.ready.effect.0.time", Clock(Int(buff, "time", 0)));
+    }
+
+    // Sages in Breath of the Wild's Champions rows: joined sages only, in the game's order. display_kind 1: ready
+    // (with the glow, "On"), 2: recharging (the time left), 4: not with Link ("Off").
+    static constexpr const char* SageIcons[] = {"Wind", "Fire", "Water", "Thunder", "Soul"};
+    int rows = 0;
+    for (size_t i = 0; i < SageIds.size(); ++i) {
+        const Sage& sg = model.sages[i];
+        if (!sg.joined)
+            continue;
+        const std::string p = "totk.ready.champion_slot." + std::to_string(rows);
+        const int cd = static_cast<int>(std::lround(sg.cooldown));
+        const int kind = cd > 0 ? 2 : sg.summoned ? 1 : 4;
+        Text(p + ".icon", std::string{Prefix} + "lyt/SageSoulIcon_" + SageIcons[i] + "^s");
+        I64(p + ".tint", kind == 4 ? 1 : 0);
+        I64(p + ".display_kind", kind);
+        Text(p + ".display", kind == 2 ? Clock(cd) : kind == 1 ? "On" : "Off");
+        ++rows;
+    }
+    I64("totk.ready.champions.count", model.have_sages ? rows : 0);
+    I64("totk.ready.champions.available", model.have_sages && rows > 0);
+
+    PublishHeal();
 }
 
-void Module::PublishHearts() {
-    const json& pl = model.player;
-    const bool known = pl.contains("maxLife");
-    I64("totk.hearts.known", known);
-    const int max = std::max(0, Int(pl, "maxLife", 0)), life = std::max(0, Int(pl, "life", 0));
-    const int extra = std::max(0, Int(pl, "extraLife", 0)), broken = std::max(0, Int(pl, "breakLife", 0));
-    const bool low = known && LowHearts(life, max);
-    I64("totk.hearts.low", low);
-    I64("totk.hearts.ok", !low);
-    Text("totk.hearts.text", known ? Hearts(life) + " / " + Hearts(max) : "\xE2\x80\x94");
-    const int total = known ? std::min(MaxHearts, (max + extra + 3) / 4) : 0;
-    I64("totk.hearts.count", total);
-    I64("totk.hearts.dense", total > 32);
-    I64("totk.hearts.sparse", total <= 32);
-    for (int i = 0; i < MaxHearts; ++i) {
-        const std::string p = "totk.heart." + std::to_string(i);
-        I64(p + ".on", i < total);
-        I64(p + ".s", i < total && total <= 32); // the 4-column grid
-        I64(p + ".d", i < total && total > 32);  // the 6-column grid
-        if (i >= total)
+// The food page and card (Breath of the Wild's heal advisor, read-only): offered while the hearts are low, with the
+// four pouch foods closest to what is missing (exact first, then one heart over, one under, ...), hearty food last.
+void Module::PublishHeal() {
+    const int life = model.common.life, max = model.common.max_life;
+    const bool valid = life >= 0 && max > 0;
+    const bool low = valid && LowHearts(life, max);
+    const int missing = valid ? std::max(0, max - life) : 0;
+    struct Row { const Item* it; bool full; int rank, waste; };
+    std::vector<Row> rows;
+    if (low && missing > 0)
+        for (const auto& it : model.pouch[Food]) {
+            if (it.actor.empty() || it.count == 0)
+                continue;
+            const bool full = it.effect == "LifeMaxUp";
+            if (!full && (it.heal == INT32_MIN || it.heal <= 0))
+                continue;
+            Row r{&it, full, INT32_MAX, 0};
+            if (!full) {
+                const int d = it.heal - missing, k = (std::abs(d) + 3) / 4;
+                r.rank = d == 0 ? 0 : d > 0 ? 2 * k - 1 : 2 * k;
+                r.waste = std::abs(d);
+            }
+            rows.push_back(r);
+        }
+    std::stable_sort(rows.begin(), rows.end(), [](const Row& a, const Row& b) {
+        if (a.rank != b.rank)
+            return a.rank < b.rank;
+        if (a.waste != b.waste)
+            return a.waste < b.waste;
+        return a.it->count > b.it->count;
+    });
+    if (rows.size() > 4)
+        rows.resize(4);
+    I64("totk.ready.heal.available", low);
+    Text("totk.ready.heal.need_text", missing > 0 ? "Need " + Hearts(missing) : std::string{"Full"});
+    Text("totk.ready.heal.need_amount_text", missing > 0 ? Hearts(missing) : std::string{"Full"});
+    I64("totk.ready.heal.empty", low && rows.empty() && missing > 0);
+    for (size_t i = 0; i < 4; ++i) {
+        const std::string p = "totk.ready.heal.row." + std::to_string(i);
+        const Row* r = low && i < rows.size() ? &rows[i] : nullptr;
+        I64(p + ".valid", r != nullptr);
+        if (!r) {
+            I64(p + ".full", 0);
+            I64(p + ".has_effect", 0);
             continue;
-        const bool yellow = i * 4 >= max;
-        const int filled = std::clamp((yellow ? max + extra : life) - i * 4, 0, 4);
-        const bool gloom = !yellow && i * 4 + 4 > max - broken;
-        Text(p + ".src", std::string{Prefix} + "heart/" + (gloom ? "g" : yellow ? "y" : "r") +
-                             std::to_string(filled));
+        }
+        const Item& it = *r->it;
+        Text(p + ".actor", std::string{Prefix} + "icon/" + it.actor + (it.effect.empty() ? "" : "_" + it.effect));
+        Text(p + ".name", ItemName(it.actor));
+        I64(p + ".count", std::max(1, it.count == INT32_MIN ? 1 : it.count));
+        I64(p + ".full", r->full);
+        Text(p + ".heal_text", r->full ? std::string{"Full"} : "+" + Hearts(it.heal));
+        const char* label = r->full ? nullptr : FoodEffectLabel(it.effect);
+        I64(p + ".has_effect", label != nullptr);
+        Text(p + ".effect_text", label ? label : "");
+        Text(p + ".bonus_text", "");
     }
 }
 
@@ -554,11 +660,22 @@ void Module::PublishMap() {
     const auto pos = pl.find("pos");
     const bool have = pos != pl.end() && pos->is_array() && pos->size() == 3;
     I64("totk.map.valid", have);
+    I64("totk.map.minimap.valid", have);
     if (have) {
         F64("totk.map.x", (*pos)[0].get<double>());
         F64("totk.map.y", -(*pos)[2].get<double>()); // map y is north-up: -Z
+        // the Map page's coordinates (spec C48): whole metres, signed, in the game's axis order (east, height, south)
+        char b[96];
+        std::snprintf(b, sizeof b, "X %+.0f  Y %+.0f  Z %+.0f", (*pos)[0].get<double>(), (*pos)[1].get<double>(),
+                      (*pos)[2].get<double>());
+        Text("totk.coords", b);
+    } else {
+        Text("totk.coords", "");
     }
+    // 0 = north, clockwise, as Breath of the Wild's botw.map.view.heading; the minimap stays north up
     F64("totk.map.heading", Num(pl, "heading", 0));
+    F64("totk.map.view.heading", Num(pl, "heading", 0));
+    I64("totk.map.view.rotation", 0);
     static constexpr std::array<char, 3> Layers{'G', 'S', 'U'};
     const std::string layer = Str(pl, "layer");
     const int follow = layer == "Sky" ? 1 : layer == "UnderGround" ? 2 : 0;
@@ -576,8 +693,9 @@ void Module::PublishMap() {
             const int k = r * Cols + c;
             char tail[32];
             std::snprintf(tail, sizeof tail, "/%d_%d", c, r);
+            // the minimap shows a 900 m window (Breath of the Wild's follow_window): the finer tiles
             Text("totk.mini.tile." + std::to_string(k),
-                 std::string{Prefix} + "map/" + Layers[follow] + "/2" + tail);
+                 std::string{Prefix} + "map/" + Layers[follow] + "/1" + tail);
             Text("totk.map.tile." + std::to_string(k), std::string{Prefix} + "map/" + Layers[page_layer] +
                                                            "/" + std::to_string(page_lod) + tail);
         }
@@ -611,7 +729,7 @@ void Module::PublishInventory() {
         I64(p + ".life", life ? std::max(0, it->life) : 0);
         I64(p + ".life_max", std::max(1, scale[cat]));
         I64(p + ".life_low", life && it->life < 5);
-        Text(p + ".qty", it->count != INT32_MIN && it->count > 1 ? "\xC3\x97" + std::to_string(it->count) : "");
+        Text(p + ".qty", it->count != INT32_MIN && it->count > 1 ? "x" + std::to_string(it->count) : ""); // C41
         I64(p + ".fused", !it->fuse.empty());
         if (!it->fuse.empty())
             Text(p + ".fuse_icon", std::string{Prefix} + "icon/" + it->fuse);
@@ -641,7 +759,7 @@ void Module::PublishInventory() {
             facts += (facts.empty() ? "" : "   ") + std::string{"Fused: "} + ItemName(it.fuse) +
                      (it.fuse_life != INT32_MIN ? " (" + std::to_string(it.fuse_life) + ")" : "");
         if (it.count != INT32_MIN)
-            facts += (facts.empty() ? "" : "   ") + std::string{"\xC3\x97"} + std::to_string(it.count);
+            facts += (facts.empty() ? "" : "   ") + std::string{"x"} + std::to_string(it.count);
         if (it.heal != INT32_MIN && it.heal > 0)
             facts += (facts.empty() ? "" : "   ") + std::string{"Hearts "} + Hearts(it.heal);
         if (it.time != INT32_MIN && it.time > 0)
@@ -672,7 +790,11 @@ std::optional<Image> Module::Layout(std::string_view texture) {
 std::optional<Image> Module::Icon(std::string_view actor) {
     if (actor.empty() || actor.find('/') != std::string_view::npos || actor.find("..") != std::string_view::npos)
         return std::nullopt;
-    const auto bntx = romfs->Read("UI/Tex/Icon/" + std::string{actor} + ".bntx.zs");
+    auto bntx = romfs->Read("UI/Tex/Icon/" + std::string{actor} + ".bntx.zs");
+    // icon/<actor>_<effect>: a cooked meal's picture named after its effect (Item_Cook_C_17_AttackUp), else the
+    // actor's own
+    if (!bntx && actor.rfind('_') != std::string_view::npos)
+        bntx = romfs->Read("UI/Tex/Icon/" + std::string{actor.substr(0, actor.rfind('_'))} + ".bntx.zs");
     if (!bntx)
         return std::nullopt;
     WonderAssets::AstcDecoder a;
@@ -725,70 +847,6 @@ std::optional<Image> Module::MapTile(std::string_view key) {
         a = astc;
     }
     return WonderAssets::DecodeBntx(*bntx, "", a);
-}
-
-// The game's heart shapes tinted like TotK Native's page: heart/<r|y|g><quarters 0-4>.
-// r: red quarters over an empty frame; y: the same in gold (extra hearts); g: gloom-damaged.
-void Tint(Image& im, u32 argb) {
-    const u8 r = argb >> 16 & 255, g = argb >> 8 & 255, b = argb & 255;
-    for (size_t i = 0; i + 3 < im.rgba.size(); i += 4) {
-        im.rgba[i] = r;
-        im.rgba[i + 1] = g;
-        im.rgba[i + 2] = b;
-    }
-}
-void Over(Image& dst, const Image& src, u32 max_x) { // src over dst, columns < max_x only
-    if (src.width != dst.width || src.height != dst.height)
-        return;
-    for (u32 y = 0; y < dst.height; ++y)
-        for (u32 x = 0; x < std::min(max_x, dst.width); ++x) {
-            const size_t i = (static_cast<size_t>(y) * dst.width + x) * 4;
-            const u32 sa = src.rgba[i + 3], da = dst.rgba[i + 3];
-            const u32 oa = sa + da * (255 - sa) / 255;
-            if (oa == 0)
-                continue;
-            for (int c = 0; c < 3; ++c)
-                dst.rgba[i + c] = static_cast<u8>((src.rgba[i + c] * sa + dst.rgba[i + c] * da * (255 - sa) / 255) / oa);
-            dst.rgba[i + 3] = static_cast<u8>(oa);
-        }
-}
-Image Resized(const Image& in, u32 w, u32 h) { // nearest neighbour onto the target frame
-    Image out{w, h, std::vector<u8>(static_cast<size_t>(w) * h * 4)};
-    for (u32 y = 0; y < h; ++y)
-        for (u32 x = 0; x < w; ++x) {
-            const u32 sx = x * in.width / w, sy = y * in.height / h;
-            std::memcpy(&out.rgba[(static_cast<size_t>(y) * w + x) * 4],
-                        &in.rgba[(static_cast<size_t>(sy) * in.width + sx) * 4], 4);
-        }
-    return out;
-}
-
-std::optional<Image> Module::Heart(std::string_view code) {
-    if (code.size() != 2 || (code[0] != 'r' && code[0] != 'y' && code[0] != 'g') || code[1] < '0' || code[1] > '4')
-        return std::nullopt;
-    auto full = Layout("HeartW_00^s");
-    auto frame = Layout("HeartFrame_00^s");
-    if (!full)
-        return std::nullopt;
-    Image out = frame ? Resized(*frame, full->width, full->height) : *full;
-    Tint(out, 0xff657369);
-    if (!frame) // no frame texture: the empty heart is the full shape, dimmed
-        for (size_t i = 3; i < out.rgba.size(); i += 4)
-            out.rgba[i] = static_cast<u8>(out.rgba[i] * 3 / 4);
-    const int quarters = code[1] - '0';
-    if (quarters > 0) {
-        Image fill = *full;
-        Tint(fill, code[0] == 'y' ? 0xffead375 : 0xffe7796b);
-        Over(out, fill, full->width * static_cast<u32>(quarters) / 4);
-    }
-    if (code[0] == 'g') {
-        if (auto broken = Layout("HeartBreakW_00^s")) {
-            Image b = Resized(*broken, full->width, full->height);
-            Tint(b, 0xffa45660);
-            Over(out, b, b.width);
-        }
-    }
-    return out;
 }
 
 // gen/clear: a transparent pixel (the map areas' base picture: the tiles are overlays).
@@ -868,8 +926,6 @@ EdenDsmodBool Module::LoadImage(std::string_view key, void* receiver, EdenDsmodI
         im = Layout(k.substr(4));
     else if (k.starts_with("map/"))
         im = MapTile(k.substr(4));
-    else if (k.starts_with("heart/"))
-        im = Heart(k.substr(6));
     else if (k.starts_with("gen/"))
         im = Generated(k.substr(4));
     else if (k.starts_with("font/")) {

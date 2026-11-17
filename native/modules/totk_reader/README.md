@@ -10,6 +10,7 @@ compatible with the GPL.
 |---|---|
 | `companion_snapshot.c`, `companion.h`, `companion_state.h` | Copied unchanged. Keep them identical to the upstream copies, so fixes can be compared and taken across |
 | `game_version.h` | The 1.4.3 lines of upstream `game_version.h` that `companion_snapshot.c` uses |
+| `totk_gamedata.c`, `totk_gamedata.h` | Written for Eden Duo: GameData values the snapshot does not report (current stamina and `PlayerStatus.IsTired`, shrines found from `DungeonState.Dungeon000..151`), read with the same table layout. MIT |
 | `totk_reader_ro.c`, `totk_reader_ro.h` | Written for Eden Duo: read-only stand-ins for the parts of upstream `companion_actions.c` the snapshot calls (the SHA-256 is copied verbatim; no item actions, no guest calls, no writes) |
 
 The reader's offsets, guards and data layout are documented upstream in
