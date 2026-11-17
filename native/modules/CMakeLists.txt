@@ -245,7 +245,8 @@ if (NOT ANDROID)
         "${EDEN_SOURCE_ROOT}/externals/bc_decoder" "${WONDER_ZSTD_LIB}")
 endif()
 
-# The Legend of Zelda: Tears of the Kingdom 1.4.3: read-only. Game state through TotK Native's MIT
+# The Legend of Zelda: Tears of the Kingdom 1.4.3: reads only (item actions only through TotK Native's port,
+# totk_native_actions.h). Game state through TotK Native's MIT
 # reader (totk_reader/, compiled unchanged, plus totk_gamedata.c for stamina and shrines); art and the Rodin font decoded from the player's romfs
 # (zstd frames with the ZsDic dictionaries -> SARC -> BNTX / bfotf) with Wonder's decoders.
 set(TOTK_SOURCES
@@ -260,6 +261,7 @@ set(TOTK_SOURCES
     totk_reader/totk_reader_ro.h
     totk_reader/totk_gamedata.c
     totk_reader/totk_gamedata.h
+    totk_native_actions.h
     wonder_assets.cpp
     wonder_assets.h
     wonder_font.cpp
