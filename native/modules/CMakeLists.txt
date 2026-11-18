@@ -251,6 +251,8 @@ endif()
 # (zstd frames with the ZsDic dictionaries -> SARC -> BNTX / bfotf) with Wonder's decoders.
 set(TOTK_SOURCES
     0100F2C0115B6000.cpp
+    totk_layer.cpp
+    totk_layer.h
     totk_romfs.cpp
     totk_romfs.h
     totk_reader/companion.h
@@ -531,6 +533,8 @@ endif()
 set_source_files_properties(echoes_fonts.cpp PROPERTIES COMPILE_OPTIONS -ffp-contract=off)
 
 if(BUILD_TESTING AND NOT ANDROID)
+    # Tears of the Kingdom's map-layer rule; set TOTK_BECO=<your MainField.beco> to also check the real grids.
+    dsmod_add_test(dsmod-totk-layer KEEP_ASSERTS SOURCES totk_layer_test.cpp totk_layer.cpp totk_layer.h)
     dsmod_add_test(dsmod-wonder-catalog KEEP_ASSERTS
         SOURCES wonder_catalog_test.cpp ${WONDER_ASSET_SOURCES}
         INCLUDE_DIRECTORIES "${EDEN_NLOHMANN_JSON_INCLUDE_DIR}"
