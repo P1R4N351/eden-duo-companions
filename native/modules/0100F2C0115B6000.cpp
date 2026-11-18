@@ -1181,7 +1181,7 @@ void Module::PublishLeft(int sage_rows, const std::array<int, 5>& row_sage) {
     }
     {
         std::scoped_lock lock{act_mutex};
-        sage_rows = shown;
+        this->sage_rows = shown;   // the member: the parameter of the same name is the row count
     }
     // the line under the panel: the latest sage request while it runs and for five seconds after, else why the
     // switches cannot be used, else how to use them
