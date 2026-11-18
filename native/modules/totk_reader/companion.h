@@ -54,7 +54,9 @@ void companion_actions_init(const CompanionEnv *env);
 enum { COMPANION_BUSY = -1, COMPANION_REFUSED = -2, COMPANION_UNSUPPORTED = -3, COMPANION_INVALID = -4 };
 /* From the companion's poller thread: queue one item action for the next frame end. action: equip, unequip, eat, drink,
    use, hold, takeOut, fuseArrow; category: the snapshot's pouch key; slot, actor, partition, pouch_gen: the item and
-   snapshot it was chosen from. One request at a time: anything while one is pending is dropped (COMPANION_BUSY). */
+   snapshot it was chosen from. One request at a time: anything while one is pending is dropped (COMPANION_BUSY).
+   The sages: action summonSage or dismissSage, category "sages", slot the sage (0 Wind .. 4 Soul), actor its id ("Wind"),
+   partition 1 when the page showed it with Link, 0 otherwise (refused "stateChanged" when the game disagrees). */
 int companion_request(uintptr_t main_base, const char *action, const char *category, int slot, const char *actor,
                       int partition, long long pouch_gen);
 /* {"seq":n,"state":"pending|done|refused|failed","reason":"…"} for the latest request, 0 (nothing written) for any
@@ -67,6 +69,8 @@ void companion_tick(uintptr_t main_base, uint64_t frame);
 
 /* ---------- between the snapshot and the actions (internal) ---------- */
 enum { COMPANION_CATS = 9, COMPANION_NAME = 64 };
+/* The Eden Duo page's sage switches use the item-action route with this pseudo-key (no pouch key): slot = the sage. */
+enum { COMPANION_SAGES = 9 };
 /* The snapshot's pouch keys are numbered weapons, bows, shields, arrows, armor, materials, food, zonai, keyItems:
    companion_category gives a key's number (-1 unknown), companion_category_game the game's pouch category for it. */
 int companion_category(const char *key);
@@ -103,6 +107,9 @@ typedef struct { const char *id; int enabled; const char *reason; } CompanionAct
 /* The actions the game's own menus offer for one item, from the game-side state of the last frame-end tick (a view of
    the item read just before); returns how many (at most 3). Unknown item facts are requested from the next tick. */
 unsigned companion_item_actions(int key, const CompanionView *v, CompanionAction out[3]);
+/* A sage's switch (0 Wind .. 4 Soul): one action, summonSage or dismissSage, enabled or why not, from the state of the
+   last frame-end tick; asking makes the next ticks read the sages. 0 for another index. */
+unsigned companion_sage_actions(int sage, CompanionAction out[3]);
 /* The snapshot's actionState and pouchGen. companion_pouch_gen bumps the generation when ident differs from the last
    one it was given and returns it. Both keep the game-side state refreshing while the companion reads. */
 void companion_action_state(int *ok, const char **reason, int *pause_menu, int *aiming);
