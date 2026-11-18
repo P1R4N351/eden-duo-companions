@@ -1,5 +1,6 @@
 /* GameData values for the Eden Duo page that companion_snapshot.c does not report: current stamina and whether Link is
-   out of breath, and how many shrines have been found. Read-only: memory reads through the caller's fault-tolerant
+   out of breath, how many shrines have been found, and the quest state (each quest's step, the tracked quest; the
+   quest catalogue itself is totk_quests.c, from the player's romfs). Read-only: memory reads through the caller's fault-tolerant
    reader, nothing written or called. MIT, like the reader (LICENSE.MIT).
 
    The GameDataMgr layout is companion_snapshot.c's (TOTK 1.4.3, see there): *(main + 0x3ad66b0) holds the manager; one
@@ -8,18 +9,25 @@
    the committed value sits at a fixed offset of each entry. Names and enum values are MurmurHash3 of the full dotted name
    (companion_hash). The flags were checked by hash against GameData/GameDataList.Product.140 of the 1.4.3 romfs:
    PlayerStatus.Stamina (Float, default 1000), PlayerStatus.IsTired (Bool), DungeonState.Dungeon000..151 (Enum
-   {Hidden, Appear, Open, Enter, Clear}). */
+   {Hidden, Appear, Open, Enter, Clear}).
+
+   Quests (totk_quest_state): each quest's step is the Enum flag Step_<Name> (values NotReady, the quest's step names,
+   Complete: 285 of 285 rows of the 1.4.3 catalogue), the quest the player tracks the UInt SelectChallengeHash
+   (0x2029d3d8 = companion_hash("SelectChallengeHash"); it holds companion_hash(<Name>), 0 for none). The UInt table is
+   the same layout at manager + 0x788, entries of 0x28 bytes with the value at +0x1c (getUInt main+0xb12818: index
+   [gdm+0x7a0], capacity [gdm+0x7ac], count [gdm+0x790], entries [gdm+0x798], smaddl #0x28, +0x1c). */
 #include "totk_gamedata.h"
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
 
 enum { GDM_SLOT = 0x3ad66b0, MAX_TABLE = 1 << 20 };
-enum { T_BOOL, T_FLOAT, T_ENUM, T_COUNT };
+enum { T_BOOL, T_FLOAT, T_ENUM, T_UINT, T_COUNT };
 static const struct { uint16_t base, stride, value; } TYPES[T_COUNT] = {
     [T_BOOL] = {0x008, 0x18, 0x16},
     [T_FLOAT] = {0x188, 0x28, 0x1c},
     [T_ENUM] = {0x248, 0x38, 0x1c},
+    [T_UINT] = {0x788, 0x28, 0x1c},
 };
 typedef struct { uint64_t entries, index; int32_t count; uint32_t cap; int state; } Table;
 typedef struct { companion_read_fn rd; uint64_t g; Table t[T_COUNT]; } Ctx;
@@ -50,15 +58,17 @@ static uint64_t lookup(Ctx *c, int type, uint32_t hash) {
     }
     return 0;
 }
-static int value(Ctx *c, int type, const char *name, void *out, size_t n) {
-    uint64_t e = lookup(c, type, companion_hash(name));
+static int value_hash(Ctx *c, int type, uint32_t hash, void *out, size_t n) {
+    uint64_t e = lookup(c, type, hash);
     return e && rd(c, e + TYPES[type].value, out, n);
 }
+static int value(Ctx *c, int type, const char *name, void *out, size_t n) { return value_hash(c, type, companion_hash(name), out, n); }
+static int manager(Ctx *c, uintptr_t main_base) { return main_base && rd(c, main_base + GDM_SLOT, &c->g, 8) && c->g; }
 
 int totk_gamedata_read(uintptr_t main_base, companion_read_fn rdf, int with_shrines, TotkGameData *out) {
     memset(out, 0, sizeof *out);
     Ctx c = {.rd = rdf};
-    if (!main_base || !rd(&c, main_base + GDM_SLOT, &c.g, 8) || !c.g) return 0;
+    if (!manager(&c, main_base)) return 0;
 
     float stamina, max_stamina;
     if (value(&c, T_FLOAT, "PlayerStatus.Stamina", &stamina, 4) && value(&c, T_FLOAT, "PlayerStatus.MaxStamina", &max_stamina, 4) &&
@@ -80,5 +90,30 @@ int totk_gamedata_read(uintptr_t main_base, companion_read_fn rdf, int with_shri
         cleared += h == clear;
     }
     if (all) { out->shrines_ok = 1; out->shrines_found = found; out->shrines_clear = cleared; }
+    return 1;
+}
+
+int totk_quest_state(uintptr_t main_base, companion_read_fn rdf, const uint32_t *step_flags, int n, uint32_t *out_state,
+                     uint32_t *out_selected) {
+    Ctx c = {.rd = rdf};
+    for (int i = 0; i < n; i++) out_state[i] = 0;
+    *out_selected = 0;
+    if (!manager(&c, main_base)) return 0;
+    uint32_t selected = 0;
+    if (!value_hash(&c, T_UINT, TOTK_SELECT_CHALLENGE_HASH, &selected, 4)) selected = 0;
+    *out_selected = selected;
+    for (int i = 0; i < n; i++)
+        if (!value_hash(&c, T_ENUM, step_flags[i], &out_state[i], 4)) out_state[i] = 0;
+    return 1;
+}
+
+int totk_gamedata_bools(uintptr_t main_base, companion_read_fn rdf, const uint32_t *hashes, int n, signed char *out) {
+    Ctx c = {.rd = rdf};
+    for (int i = 0; i < n; i++) out[i] = -1;
+    if (!manager(&c, main_base)) return 0;
+    for (int i = 0; i < n; i++) {
+        uint8_t b;
+        if (hashes[i] && value_hash(&c, T_BOOL, hashes[i], &b, 1)) out[i] = (signed char)(b & 1);
+    }
     return 1;
 }

@@ -10,7 +10,9 @@ compatible with the GPL.
 |---|---|
 | `companion_snapshot.c`, `companion.h`, `companion_state.h` | Copied unchanged. Keep them identical to the upstream copies, so fixes can be compared and taken across |
 | `game_version.h` | The 1.4.3 lines of upstream `game_version.h` that `companion_snapshot.c` uses |
-| `totk_gamedata.c`, `totk_gamedata.h` | Written for Eden Duo: GameData values the snapshot does not report (current stamina and `PlayerStatus.IsTired`, shrines found from `DungeonState.Dungeon000..151`), read with the same table layout. MIT |
+| `totk_gamedata.c`, `totk_gamedata.h` | Written for Eden Duo: GameData values the snapshot does not report (current stamina and `PlayerStatus.IsTired`, shrines found from `DungeonState.Dungeon000..151`, every quest's `Step_<Name>` and the tracked quest `SelectChallengeHash` from the UInt table, Bool flags by hash), read with the same table layout. MIT |
+| `totk_byml.c`, `totk_byml.h` | TotK Native's BYML reader, `cg_byml()` of `games/totk/android/setup/companion/cg_formats.c` at commit `29b4924c` (MIT), with its types renamed (`CgVal` -> `TotkBymlVal`) and its error reporting reduced to a NULL result; the parsing is unchanged |
+| `totk_quests.c`, `totk_quests.h` | Written for Eden Duo: the quest catalogue from the player's `RSDB/Challenge.Product.<v>.rstbl.byml.zs` (through `totk_byml.c`), each quest's step index, and the quests the left pager shows (tracked quest first, then the last changed, then the lowest `SortIndex`) with the distance to the current step's nearest destination. No names, hashes or positions are built in. MIT |
 | `totk_reader_ro.c`, `totk_reader_ro.h` | Written for Eden Duo: read-only stand-ins for the parts of upstream `companion_actions.c` the snapshot calls (the SHA-256 is copied verbatim; no item actions, no guest calls, no writes) |
 
 The reader's offsets, guards and data layout are documented upstream in
