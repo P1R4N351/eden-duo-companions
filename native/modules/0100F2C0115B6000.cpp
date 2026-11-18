@@ -18,6 +18,15 @@
 // no table: every action shows disabled, "Item actions need the TotK Native app", and nothing is requested. This
 // module never writes guest memory and never calls guest code, with or without the table.
 //
+// The left pager (owner, 2026-11-18; one option for both games, flag left_mode, the package's "Left panel" settings
+// row): "Quest details" (0, the default) cycles Main quest, Side quest and Sages, the Sages page read-only, as Breath of
+// the Wild's Main / Side / Champions; "Sage powers" (1) shows only the Sages, each with an On/Off switch that summons or
+// dismisses the sage as the game's own Key Items menu does. The switches, like the item actions, are only carried out
+// by TotK Native's port (the runtime's "summonSage" / "dismissSage", key 9 of totk_native_actions.h); in Eden Duo they
+// show read-only, "Needs the TotK Native app". The quests come from the player's own files: the catalogue
+// (RSDB/Challenge, totk_reader/totk_quests.c), each quest's step and the tracked quest from GameData
+// (totk_reader/totk_gamedata.c), the names and objectives from ChallengeMsg/Info_<Name>.msbt. No quest text is shipped.
+//
 // Art and text are decoded from the player's romfs on request (module:totk:<key>, see
 // LoadImage): item icons, layout textures from the Common layout archive, the map tiles, and the
 // game's Rodin font (Super Mario Bros. Wonder's font code, wonder_font.cpp). Every TotK file is a
@@ -50,6 +59,7 @@ extern "C" {
 #include "totk_reader/companion.h" // TotK Native's C header, kept as it is there
 }
 #include "totk_reader/totk_gamedata.h"
+#include "totk_reader/totk_quests.h"
 #include "totk_reader/totk_reader_ro.h"
 #include "totk_native_actions.h"
 #include "totk_layer.h"
@@ -118,6 +128,9 @@ constexpr std::array<std::array<int, 2>, TabCount> Tabs{{{Weapons, -1}, {Bows, A
                                                          {Armor, -1}, {Materials, -1}, {Food, -1},
                                                          {Zonai, -1}, {KeyItems, -1}}};
 constexpr std::array<const char*, 5> SageIds{"Wind", "Fire", "Water", "Electric", "Soul"};
+// Each sage's vow (Key Items), whose name in the player's own text names the sage on the page: "<name>'s Vow".
+constexpr std::array<const char*, 5> SageVows{"Obj_SageSoul_Rito", "Obj_SageSoul_Goron", "Obj_SageSoul_Zora",
+                                              "Obj_SageSoul_Gerudo", "Obj_SageSoul_Zonau"};
 
 struct Item {
     std::string actor, fuse, effect;
@@ -241,14 +254,16 @@ struct Act {
     std::string id, reason; // reason: "" when enabled
     bool enabled = false;
 };
-constexpr std::array<std::array<const char*, 3>, 8> ActionWords{{{"equip", "Equip", "Equipped"},
+constexpr std::array<std::array<const char*, 3>, 10> ActionWords{{{"equip", "Equip", "Equipped"},
                                                                  {"unequip", "Unequip", "Unequipped"},
                                                                  {"eat", "Eat", "Eaten"},
                                                                  {"drink", "Drink", "Drunk"},
                                                                  {"use", "Use", "Used"},
                                                                  {"hold", "Hold", "Now holding it"},
                                                                  {"takeOut", "Take out", "Taken out"},
-                                                                 {"fuseArrow", "Fuse to arrows", "Fused to arrows"}}};
+                                                                 {"fuseArrow", "Fuse to arrows", "Fused to arrows"},
+                                                                 {"summonSage", "Summon", "Summoned"},
+                                                                 {"dismissSage", "Dismiss", "Dismissed"}}};
 std::string ActionWord(std::string_view id, int which) { // 1: the button, 2: the outcome
     for (const auto& w : ActionWords)
         if (id == w[0])
@@ -273,7 +288,10 @@ std::string ReasonText(std::string_view code, bool native) {
         {"gameRefused", "The game didn't allow it"}, {"timeout", "No response from the game"},
         {"noAnswer", "No response from the game"}, {"teardown", "The game closed"},
         {"busy", "Another action is still running"}, {"notNow", "Not possible right now"},
-        {"invalid", "The request was not valid"}, {"notOffered", "Not possible right now"}};
+        {"invalid", "The request was not valid"}, {"notOffered", "Not possible right now"},
+        {"notJoined", "This sage hasn't joined you yet"}, {"sageUnavailableHere", "Sages can't be summoned here"},
+        {"sagesSuppressed", "The sages are away right now"}, {"stateChanged", "It changed in the game; try again"},
+        {"needsNative", "Needs the TotK Native app"}};
     if (code == "notAvailableYet" && !native)
         return "Item actions need the TotK Native app";
     const auto it = Texts.find(code);
@@ -359,7 +377,9 @@ public:
             native.reset();
     }
     // "totk.act": argument = source * 8 + button (source 0 the Inventory detail, 1 the quick picker); "totk.select":
-    // the quick picker's cell. Runs outside the tick (MODULE_GUIDE); false refuses (the page plays the refused haptic).
+    // the quick picker's cell; "totk.left": the left pager, +1 / -1 (Quest details only); "totk.sage": a sage's switch
+    // on the Sage powers panel, argument = row * 2 + (1 summon, 0 dismiss). Runs outside the tick (MODULE_GUIDE); false
+    // refuses (the page plays the refused haptic).
     EdenDsmodBool Action(std::string_view name, s64 argument);
 
 private:
@@ -404,6 +424,10 @@ private:
         return host.get_i64 ? host.get_i64(host.userdata, name, fallback) : fallback;
     }
     void PublishReady();
+    void PublishLeft(int sage_rows, const std::array<int, 5>& row_sage);
+    void ReadQuests(uintptr_t main);
+    void LoadQuests();
+    Act SageAct(const std::optional<TotkNativeActions>& n, int sage, bool summoned);
     void PublishGear(const char* slot, Cat cat);
     int MaxLife(const std::string& actor);
     void PublishHeal();
@@ -431,6 +455,8 @@ private:
     mutable std::mutex text_mutex;
     std::unordered_map<std::string, std::string> names;
     std::atomic<bool> text_ready{false};
+    std::vector<u8> quest_sarc;   // text thread only: the message archive while LoadQuests reads it
+    std::string quest_log;        // under text_mutex: what LoadQuests found, logged once by the sample thread
 
     // Link's map layer, decided as the game decides it (totk_layer.h); never MapData.CurrentLayer
     void UpdateLayer(uintptr_t main);
@@ -451,11 +477,54 @@ private:
     // an item's maximum durability (the actor pack's MaxLife), -1 when it has none; sample thread only
     std::unordered_map<std::string, int> max_life;
 
+    // quests (Quest details): the catalogue and its text, loaded once on the text thread (under text_mutex), never
+    // replaced afterwards, so a quest index stays valid
+    struct QuestText {
+        std::string name;                                     // the "Name" label
+        std::unordered_map<std::string, std::string> labels;  // step name -> objective
+    };
+    struct QuestBook {
+        TotkQuestCatalog cat{};
+        std::vector<QuestText> text;   // per quest (empty when the quest has no message file)
+        QuestBook() = default;
+        QuestBook(const QuestBook&) = delete;
+        QuestBook& operator=(const QuestBook&) = delete;
+        ~QuestBook() { totk_quest_catalog_free(&cat); }
+    };
+    std::shared_ptr<const QuestBook> quest_book;
+    std::shared_ptr<const QuestBook> Book() const {
+        std::scoped_lock lock{text_mutex};
+        return quest_book;
+    }
+    // sample thread: every quest's step (totk_quest_step), when it last changed, the tracked quest, the two picks
+    std::vector<int> quest_step;
+    std::vector<u64> quest_changed;
+    u32 quest_selected = 0;
+    bool quests_ok = false;
+    std::array<int, 2> quest_pick{-1, -1}, quest_tracked{0, 0};
+    std::unordered_map<u32, int> quest_blackout;   // BlackOutFlag hash -> 1 set, 0 not, -1 no such Bool
+    // the left pager (any thread): its page in Quest details, whether the Sages page exists, the Sage powers panel
+    std::atomic<int> left_page{0};
+    std::atomic<bool> left_sages{false}, left_powers{false};
+
     // item actions
     mutable std::mutex act_mutex;
     std::optional<TotkNativeActions> native; // guarded
     std::array<Chosen, SourceCount> chosen;  // guarded
     Request request;                         // guarded
+    struct SageRow {                         // guarded: a row of the Sage powers panel as last shown
+        bool valid = false, summoned = false, enabled = false;
+        int sage = -1;
+        std::string reason;
+    };
+    std::array<SageRow, 5> sage_rows;        // guarded
+    struct SageCached {                      // sample thread: each sage's action, refreshed at the live rate
+        bool summoned = false;
+        u64 at = 0;
+        bool known = false;
+        Act act;
+    };
+    std::array<SageCached, 5> sage_cached;
     struct Cached {                          // sample thread: each source's actions, refreshed at the live rate
         int cat = -1, slot = -1;
         std::string actor;
@@ -501,16 +570,22 @@ void Module::LoadText() {
     // 1.4.3), so the newest one present is used.
     for (int v = 199; v >= 100; --v) {
         const std::string path = "Mals/USen.Product." + std::to_string(v) + ".sarc.zs";
-        const auto sarc = romfs->Read(path);
+        auto sarc = romfs->Read(path);
         if (!sarc)
             continue;
         std::unordered_map<std::string, std::string> all;
         if (const auto msbt = WonderAssets::SarcMember(*sarc, "ActorMsg/PouchContent.msbt"))
             all = TotkRomfs::ParseMsbt(*msbt);
-        std::scoped_lock lock{text_mutex};
-        names = std::move(all);
+        {
+            std::scoped_lock lock{text_mutex};
+            names = std::move(all);
+        }
+        quest_sarc = std::move(*sarc);
         break;
     }
+    LoadQuests();
+    quest_sarc.clear();
+    quest_sarc.shrink_to_fit();
     // The main field's area-height grids, for the map layer while the live ones cannot be read
     if (const auto pack = romfs->Read("Pack/Bootup.Nin_NX_NVN.pack.zs"))
         if (const auto beco = WonderAssets::SarcMember(*pack, "WorldMgr/AreaHeight/MainField.beco")) {
@@ -521,6 +596,97 @@ void Module::LoadText() {
             }
         }
     text_ready = true;
+}
+
+// The quest catalogue (RSDB/Challenge.Product.<v>.rstbl.byml.zs, the newest present: 143 on 1.4.3) and each quest's
+// text, ChallengeMsg/Info_<Name>.msbt of the message archive LoadText found (tags dropped by ParseMsbt). Text thread.
+void Module::LoadQuests() {
+    auto book = std::make_shared<QuestBook>();
+    for (int v = 199; v >= 100; --v) {
+        const auto table = romfs->Read("RSDB/Challenge.Product." + std::to_string(v) + ".rstbl.byml.zs");
+        if (!table)
+            continue;
+        if (totk_quest_catalog(table->data(), table->size(), &book->cat) == 0)
+            break;
+    }
+    if (!book->cat.nquests) {
+        std::scoped_lock lock{text_mutex};
+        quest_log = "TotK quests: no quest catalogue in the romfs; the quest pages say \"No active quest\"";
+        return;
+    }
+    book->text.resize(book->cat.nquests);
+    int with_text = 0;
+    for (u32 q = 0; q < book->cat.nquests && !quest_sarc.empty(); ++q) {
+        const auto msbt = WonderAssets::SarcMember(quest_sarc, std::string{"ChallengeMsg/Info_"} + book->cat.quests[q].name + ".msbt");
+        if (!msbt)
+            continue;
+        auto labels = TotkRomfs::ParseMsbt(*msbt);
+        QuestText& t = book->text[q];
+        if (const auto it = labels.find("Name"); it != labels.end())
+            t.name = it->second;
+        t.labels = std::move(labels);
+        ++with_text;
+    }
+    std::scoped_lock lock{text_mutex};
+    quest_log = "TotK quests: " + std::to_string(book->cat.nquests) + " quests, " + std::to_string(with_text) +
+                " with text (Quest details)";
+    quest_book = std::move(book);
+}
+
+// Every quest's step and the tracked quest (GameData, full samples), what changed since the last read, the two quests
+// the pager shows and the BlackOutFlag of their current destinations.
+void Module::ReadQuests(uintptr_t main) {
+    std::string line;
+    {
+        std::scoped_lock lock{text_mutex};
+        line.swap(quest_log);
+    }
+    if (!line.empty() && host.log)
+        host.log(host.userdata, EDEN_DSMOD_LOG_INFO, line.c_str());
+    const auto book = Book();
+    if (!book) {
+        quests_ok = false;
+        return;
+    }
+    const TotkQuestCatalog& c = book->cat;
+    std::vector<u32> flags(c.nquests), states(c.nquests);
+    for (u32 q = 0; q < c.nquests; ++q)
+        flags[q] = c.quests[q].step_flag;
+    u32 selected = 0;
+    if (!totk_quest_state(main, GuestRead, flags.data(), static_cast<int>(c.nquests), states.data(), &selected)) {
+        quests_ok = false;
+        return;
+    }
+    const bool had = quests_ok && quest_step.size() == c.nquests;
+    quest_step.resize(c.nquests, TOTK_QUEST_UNKNOWN);
+    quest_changed.resize(c.nquests, 0);
+    for (u32 q = 0; q < c.nquests; ++q) {
+        const int step = totk_quest_step(&c, q, states[q]);
+        if (had && step != quest_step[q] && step != TOTK_QUEST_UNKNOWN && quest_step[q] != TOTK_QUEST_UNKNOWN)
+            quest_changed[q] = tick + 1;
+        quest_step[q] = step;
+    }
+    quest_selected = selected;
+    quests_ok = true;
+    int pick[2], tracked[2];
+    totk_quest_pick(&c, quest_step.data(), selected, quest_changed.data(), pick, tracked);
+    std::vector<u32> hashes;
+    for (int p = 0; p < 2; ++p) {
+        quest_pick[p] = pick[p];
+        quest_tracked[p] = tracked[p];
+        if (pick[p] < 0 || quest_step[pick[p]] < 0 || quest_step[pick[p]] >= static_cast<int>(c.quests[pick[p]].nsteps))
+            continue;
+        const TotkQuestStep& st = c.steps[c.quests[pick[p]].first_step + static_cast<u32>(quest_step[pick[p]])];
+        for (u32 k = 0; k < st.ndest; ++k)
+            if (const u32 h = c.dests[st.first_dest + k].blackout)
+                hashes.push_back(h);
+    }
+    std::vector<signed char> set(hashes.size(), -1);
+    if (!hashes.empty())
+        totk_gamedata_bools(main, GuestRead, hashes.data(), static_cast<int>(hashes.size()), set.data());
+    quest_blackout.clear();
+    for (size_t i = 0; i < hashes.size(); ++i)
+        quest_blackout[hashes[i]] = set[i];
 }
 
 // Replaces the snapshot's "layer" (MapData.CurrentLayer, a saved UI value: "Sky on the ground", 2026-11-17) with the
@@ -592,6 +758,7 @@ void Module::Read(bool full) {
         model.player = json::object();
         model.gamedata = {};
         model.shrines_ok = false;
+        quests_ok = false;
         if (model.status != "starting") { // keep the pouch across a moment of "starting" only
             model.have_pouch = model.have_sages = false;
             for (auto& c : model.pouch)
@@ -616,6 +783,7 @@ void Module::Read(bool full) {
     if (full) {
         model.shrines_ok = model.gamedata.shrines_ok;
         model.shrines_found = model.gamedata.shrines_found;
+        ReadQuests(main);
     }
     const json action = root.value("actionState", json::object());
     model.reason = Str(action, "reason");
@@ -888,23 +1056,157 @@ void Module::PublishReady() {
     // (with the glow, "On"), 2: recharging (the time left), 4: not with Link ("Off").
     static constexpr const char* SageIcons[] = {"Wind", "Fire", "Water", "Thunder", "Soul"};
     int rows = 0;
+    std::array<int, 5> row_sage{-1, -1, -1, -1, -1};
+    const bool powers = Get("@flag:left_mode", 0) == 1;
     for (size_t i = 0; i < SageIds.size(); ++i) {
         const Sage& sg = model.sages[i];
         if (!sg.joined)
             continue;
+        row_sage[static_cast<size_t>(rows)] = static_cast<int>(i);
         const std::string p = "totk.ready.champion_slot." + std::to_string(rows);
         const int cd = static_cast<int>(std::lround(sg.cooldown));
         const int kind = cd > 0 ? 2 : sg.summoned ? 1 : 4;
         Text(p + ".icon", std::string{Prefix} + "lyt/SageSoulIcon_" + SageIcons[i] + "^s");
         I64(p + ".tint", kind == 4 ? 1 : 0);
         I64(p + ".display_kind", kind);
-        Text(p + ".display", kind == 2 ? Clock(cd) : kind == 1 ? "On" : "Off");
+        // Sage powers: the row's switch says On or Off, so the text only carries the time left
+        Text(p + ".display", kind == 2 ? Clock(cd) : powers ? "" : kind == 1 ? "On" : "Off");
         ++rows;
     }
     I64("totk.ready.champions.count", model.have_sages ? rows : 0);
     I64("totk.ready.champions.available", model.have_sages && rows > 0);
+    PublishLeft(model.have_sages ? rows : 0, row_sage);
 
     PublishHeal();
+}
+
+// One sage's switch action from TotK Native's runtime (key 9 of the action table: the sage's index as the slot), asked
+// at the live rate. Without the port, or from a runtime without sage actions (no answer), it is "notAvailableYet".
+Act Module::SageAct(const std::optional<TotkNativeActions>& n, int sage, bool summoned) {
+    SageCached& c = sage_cached[static_cast<size_t>(sage)];
+    if (c.known && c.summoned == summoned && tick - c.at < LiveEvery)
+        return c.act;
+    c = {summoned, tick, true, {summoned ? "dismissSage" : "summonSage", n ? "notAvailableYet" : "needsNative", false}};
+    if (!n)
+        return c.act;
+    TotkNativeAction out[3]{};
+    if (n->item_actions(n->userdata, TOTK_NATIVE_SAGES, sage, out) > 0 && out[0].id)
+        c.act = {out[0].id, out[0].reason ? out[0].reason : "", out[0].enabled != 0};
+    return c.act;
+}
+
+// The left pager (Breath of the Wild's names with totk. in front: botw.ready.left.* and botw.ready.quest.*).
+// Quest details (flag left_mode 0): pages 0 Main quest, 1 Side quest, 2 Sages (while a sage has joined), turned by
+// swiping (totk.left); the dots show where. Sage powers (1): the Sages page only, with a switch per row.
+void Module::PublishLeft(int sage_rows, const std::array<int, 5>& row_sage) {
+    const bool powers = Get("@flag:left_mode", 0) == 1;
+    left_powers = powers;
+    left_sages = sage_rows > 0;
+    int page = left_page.load();
+    if (page == 2 && sage_rows == 0)
+        left_page = page = 0;
+    if (powers)
+        page = 2;
+    I64("totk.ready.left.mode", powers);
+    I64("totk.ready.left.powers", powers);
+    I64("totk.ready.left.dots", !powers);
+    I64("totk.ready.left.page", page);
+    I64("totk.ready.left.quest", page < 2);
+    I64("totk.ready.left.champions", page == 2);
+
+    // the quest of a quest page: its name, the current step's objective and the distance to its nearest destination
+    const auto book = Book();
+    const int q = page < 2 && quests_ok && book ? quest_pick[static_cast<size_t>(page)] : -1;
+    I64("totk.ready.quest.valid", q >= 0);
+    I64("totk.ready.quest.tracked", q >= 0 && quest_tracked[static_cast<size_t>(page)]);
+    if (q < 0) {
+        Text("totk.ready.quest.name", "");
+        Text("totk.ready.quest.objective", "");
+        Text("totk.ready.quest.distance", "");
+    } else {
+        const TotkQuestCatalog& c = book->cat;
+        const TotkQuest& quest = c.quests[q];
+        const QuestText& text = book->text[static_cast<size_t>(q)];
+        Text("totk.ready.quest.name", !text.name.empty() ? text.name : Humanize(quest.name));
+        // a step without a label of its own keeps the objective of the last step that has one (Ready never has one)
+        std::string objective;
+        for (int st = quest_step[static_cast<size_t>(q)]; st >= 1 && objective.empty(); --st)
+            if (const auto it = text.labels.find(c.steps[quest.first_step + static_cast<u32>(st)].name); it != text.labels.end())
+                objective = it->second;
+        Text("totk.ready.quest.objective", objective);
+        char distance[24]{};
+        const auto pos = model.player.find("pos");
+        if (pos != model.player.end() && pos->is_array() && pos->size() == 3) {
+            const auto blackout = [](void* ctx, u32 hash) -> int {
+                const auto& set = *static_cast<const std::unordered_map<u32, int>*>(ctx);
+                const auto it = set.find(hash);
+                return it != set.end() ? it->second : -1;
+            };
+            const double d = totk_quest_distance(&c, static_cast<u32>(q), quest_step[static_cast<size_t>(q)],
+                                                 (*pos)[0].get<float>(), (*pos)[2].get<float>(), blackout, &quest_blackout);
+            if (d >= 1000) // as Breath of the Wild's pager
+                std::snprintf(distance, sizeof distance, "%.1f km", d / 1000.0);
+            else if (d >= 0)
+                std::snprintf(distance, sizeof distance, "%d m", static_cast<int>(d + .5));
+        }
+        Text("totk.ready.quest.distance", distance);
+    }
+
+    // Sage powers: each joined sage's switch, On while the sage is with Link. Tappable when TotK Native's runtime
+    // offers the action now; otherwise shown as it is, with the reason under the panel.
+    const auto n = Native();
+    Request r;
+    {
+        std::scoped_lock lock{act_mutex};
+        r = request;
+    }
+    std::array<SageRow, 5> shown{};
+    std::string reason;
+    for (size_t k = 0; k < 5; ++k) {
+        const std::string p = "totk.ready.champion_slot." + std::to_string(k) + ".switch";
+        const int sage = static_cast<int>(k) < sage_rows ? row_sage[k] : -1;
+        const bool show = powers && sage >= 0;
+        const bool on = show && model.sages[static_cast<size_t>(sage)].summoned;
+        SageRow& row = shown[k];
+        if (show) {
+            const Act a = SageAct(n, sage, on);
+            row = {true, on, a.enabled && r.final, sage, a.reason};
+            if (reason.empty() && !a.enabled)
+                reason = a.reason;
+        }
+        I64(p + ".on_tap", show && row.enabled && on);
+        I64(p + ".off_tap", show && row.enabled && !on);
+        I64(p + ".on_fixed", show && !row.enabled && on);
+        I64(p + ".off_fixed", show && !row.enabled && !on);
+    }
+    {
+        std::scoped_lock lock{act_mutex};
+        sage_rows = shown;
+    }
+    // the line under the panel: the latest sage request while it runs and for five seconds after, else why the
+    // switches cannot be used, else how to use them
+    std::string note;
+    const bool sage_request = r.action == "summonSage" || r.action == "dismissSage";
+    if (powers) {
+        if (sage_request && (!r.final || std::chrono::steady_clock::now() - r.ended < std::chrono::seconds{5})) {
+            if (!r.final)
+                note = ActionWord(r.action, 1) + ": " + r.name + "\xE2\x80\xA6";
+            else if (r.state == "done")
+                note = ActionWord(r.action, 2) + ": " + r.name + (r.reason == "flagOnly" ? " (stays until the next load)" : "");
+            else
+                note = (r.state == "refused" ? "Not done: " : "Failed: ") + ReasonText(r.reason, n.has_value());
+        } else if (sage_rows == 0) {
+            note = model.have_sages ? "No sage has joined you yet" : "";
+        } else if (!n) {
+            note = ReasonText("needsNative", false);
+        } else if (!reason.empty()) {
+            note = ReasonText(reason, true);
+        } else {
+            note = "Tap a sage to summon or dismiss";
+        }
+    }
+    I64("totk.ready.champions.note.on", !note.empty());
+    Text("totk.ready.champions.note", note);
 }
 
 // The food page and card (Breath of the Wild's heal advisor, read-only): offered while the hearts are low, with the
@@ -1208,6 +1510,44 @@ void Module::PublishActions(const std::string& prefix, Source src, int cat, cons
 }
 
 EdenDsmodBool Module::Action(std::string_view name, s64 argument) {
+    if (name == "totk.left") {   // Quest details: Main quest, Side quest, Sages (while a sage has joined), cycling
+        if ((argument != 1 && argument != -1) || left_powers.load())
+            return EDEN_DSMOD_FALSE;
+        const int count = left_sages.load() ? 3 : 2;
+        left_page = (std::min(left_page.load(), count - 1) + static_cast<int>(argument) + count) % count;
+        return EDEN_DSMOD_TRUE;
+    }
+    if (name == "totk.sage") {   // Sage powers: row * 2 + (1 summon, 0 dismiss), as the row was last shown
+        if (argument < 0 || argument >= 10 || !left_powers.load())
+            return EDEN_DSMOD_FALSE;
+        const size_t row = static_cast<size_t>(argument / 2);
+        const bool want = argument % 2 == 1;
+        std::scoped_lock lock{act_mutex};
+        const SageRow r = sage_rows[row];
+        if (!r.valid || r.summoned == want)
+            return EDEN_DSMOD_FALSE;
+        const char* id = want ? "summonSage" : "dismissSage";
+        const std::string who = ItemName(SageVows[static_cast<size_t>(r.sage)]);
+        const auto refuse = [&](const std::string& reason) {
+            request = {0, id, who, "refused", reason, true, std::chrono::steady_clock::now(),
+                       std::chrono::steady_clock::now(), {}};
+            return EDEN_DSMOD_FALSE;
+        };
+        if (!native)
+            return refuse("needsNative");    // Eden Duo: nothing is ever requested
+        if (!request.final)
+            return EDEN_DSMOD_FALSE;
+        if (!r.enabled)
+            return refuse(r.reason);
+        // category "sages", slot = the sage, actor = its id, partition = what the row showed (1 with Link); the runtime
+        // refuses ("stateChanged") when the game no longer agrees
+        const s32 seq = native->request(native->userdata, id, "sages", r.sage, SageIds[static_cast<size_t>(r.sage)],
+                                        r.summoned ? 1 : 0, 1);
+        if (seq <= 0)
+            return refuse(seq == -1 ? "busy" : seq == -2 ? "notNow" : seq == -3 ? "unsupported" : "invalid");
+        request = {seq, id, who, "pending", "", false, std::chrono::steady_clock::now(), {}, {}};
+        return EDEN_DSMOD_TRUE;
+    }
     if (name == "totk.select") {
         if (argument < 0 || argument > 20)
             return EDEN_DSMOD_FALSE;

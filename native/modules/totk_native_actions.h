@@ -22,9 +22,15 @@ extern "C" {
 #endif
 
 #define TOTK_NATIVE_ACTIONS_VERSION 1u
+// Key 9: the sages (the left panel's Sage powers). The slot is the sage (0 Wind, 1 Fire, 2 Water, 3 Electric, 4 Soul);
+// item_actions gives one action, "summonSage" or "dismissSage" by whether the sage is with Link now; request takes
+// category "sages", that slot, the sage's id ("Wind", ...) as actor, as partition what the page showed (1 with Link, 0
+// not; refused "stateChanged" when the game no longer agrees) and pouch_gen 1. A runtime without sage actions answers
+// item_actions with 0 for this key: the module then shows the switches read-only. Same table, same version.
+#define TOTK_NATIVE_SAGES 9
 
 // One action the game's menus offer for an item: id is one of "equip", "unequip", "eat", "drink", "use", "hold",
-// "takeOut", "fuseArrow"; reason is "" when enabled, otherwise why not ("weaponLocked", "menu", "noStock", ...).
+// "takeOut", "fuseArrow" ("summonSage", "dismissSage" for key 9); reason is "" when enabled, otherwise why not ("weaponLocked", "menu", "noStock", ...).
 // Both strings are static in the host.
 typedef struct TotkNativeAction {
     const char* id;

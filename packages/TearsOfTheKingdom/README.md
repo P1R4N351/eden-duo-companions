@@ -28,8 +28,14 @@ own empty state (`—`, `—°`) or is left out (list below).
     **Fuse** well (the fused material and its durability points) above the weapon, in Breath of the
     Wild's secondary-weapon frame and arc (owner decision C19; the arc shows its empty track only,
     because a material's maximum fuse durability is not read yet);
-  - left pager: **Sages** in Breath of the Wild's Champions rows (one to five rows: icon, *On*,
-    the recharge time, or *Off* when the sage is not with Link; the glow when ready); rupees under it;
+  - left pager, as the *Left panel* setting says (see *The left panel* below): **Quest details** (the
+    default): *Main quest*, *Side quest* and **Sages**, turned by a vertical swipe, with Breath of the
+    Wild's dots; a quest page shows the quest's name from the player's own text and the distance to its
+    current destination (*No active quest* when there is none); the Sages page is Breath of the Wild's
+    Champions rows (one to five rows: icon, *On*, the recharge time, or *Off* when the sage is not with
+    Link; the glow when ready), read-only. **Sage powers**: only the Sages, each row with an **On/Off
+    switch** (summon or dismiss, as the game's Key Items menu does; TotK Native only), and a line under
+    the panel; rupees under it;
   - right pane: the header names the layer (*Surface*, *Sky*, *Depths*; see below), then **Buffs**
     (the meal effect and its time left, *No buffs*) and, while the hearts are low, **Food** (what
     is missing and, on a tap, the food card: the four pouch foods closest to it, as Breath of the
@@ -64,6 +70,35 @@ Depths. There is no time-of-day read yet, so the header names the layer everywhe
 `HeaderShowsClock` / `ClockText()` in `native/modules/0100F2C0115B6000.cpp`: once `ClockText()`
 returns the time, set the switch and the Surface and Sky show the clock; nothing in the package
 changes.
+
+### The left panel
+
+One option for both games (owner, 2026-11-18): the runtime's settings row **Left panel** (flag
+`left_mode`; holding the left pager opens the settings page): **Quest details** (0, the default) or
+**Sage powers** (1). Breath of the Wild's package in TotK Native has the same row and flag
+(*Quest details* / *Champion powers*), and TotK Native's and BotW Native's own menu (Graphics,
+Screen, *Left panel*) sets it at every start, as it does the minimap's turn; a change made on this
+page then lasts until the game closes, and the page says so under the row.
+
+- **Quest details**: the pager's pages are Breath of the Wild's Main quest / Side quest / Champions.
+  The quests come from the player's own files, nothing is shipped: the catalogue is
+  `RSDB/Challenge.Product.<v>.rstbl.byml.zs` (`totk_reader/totk_quests.c`, through TotK Native's
+  BYML reader `totk_byml.c`), each quest's step the GameData enum `Step_<Name>`, the tracked quest
+  the UInt `SelectChallengeHash` (`totk_gamedata.c`), the names and objectives
+  `ChallengeMsg/Info_<Name>.msbt` of the message archive. *Main quest* shows the tracked quest when it
+  is a main quest and still open, else the main quest whose step changed last in this session, else
+  the open main quest with the lowest `SortIndex` (rows without one last); *Side quest* the tracked
+  quest when it is not a main quest, else a Side Adventure, then a Side Quest, by the same rule. The
+  distance is to the current step's nearest destination on the map plane, leaving out destinations
+  whose `BlackOutFlag` is set (`%.1f km` from 1000 m, else `%d m`, as Breath of the Wild). The Sages
+  page is read-only here.
+- **Sage powers**: the pager shows only the Sages; each row has an On/Off switch. On means the sage
+  is with Link. A tap asks TotK Native's runtime (key 9 of `totk_native_actions.h`: the runtime's
+  `summonSage` / `dismissSage`, the game's own summon and dismiss functions in the order the pause
+  menu's Key Items calls them, on the game's frame-end thread, read back afterwards). The line under
+  the panel says what happened, why a switch cannot be used now (the game's own refusals: not joined,
+  not allowed here, ...), or *Needs the TotK Native app* in Eden Duo, where the switches show the
+  state read-only. The module never writes game memory or calls game code for this.
 
 ### The minimap's turn
 
@@ -101,6 +136,9 @@ is `totk.ready.fuse.*`.
 | `totk.ready.rune`, `.arrow`, `.arrow.count`, `.fuse`, `.fuse.life` | the ability, the arrows, the weapon's fused material |
 | `totk.ready.rupees.text` | `PlayerStatus.CurrentRupee`, grouped (`12,845`) |
 | `totk.ready.champion_slot.N.*`, `.champions.count` | the sages' companion flags |
+| `totk.ready.left.mode`, `.page`, `.quest`, `.champions`, `.powers`, `.dots` | the left pager: the *Left panel* setting (flag `left_mode`) and the page (`totk.left`) |
+| `totk.ready.quest.valid`, `.name`, `.objective`, `.distance`, `.tracked` | the quest page's quest (see *The left panel*) |
+| `totk.ready.champion_slot.N.switch.on_tap`, `.off_tap`, `.on_fixed`, `.off_fixed`, `totk.ready.champions.note` | Sage powers: row N's switch (tappable or shown as it is) and the line under the panel |
 | `totk.ready.effect.0.*`, `.effects.count` | `PlayerStatus.CookBuff`, `CookBuffTime` |
 | `totk.ready.heal.*` | life, max life and the food pouch (`LifeRecover`, effect) |
 | `totk.ready.header.text`, `totk.ready.sensor.*` | the layer (see above) |
@@ -123,9 +161,9 @@ Left out (`READY_DROP` in the generator), and why:
 
 | Widgets | Why |
 |---|---|
-| map pins, quest marks on the disc | no pin or quest read yet |
+| map pins, quest marks on the disc | no pin read yet; quest marks not drawn yet |
 | shrine panel | no in-shrine read yet |
-| quest page of the left pager, its dots, the Quest button | no quest read yet; the left pager has one page (Sages) |
+| the Quest button, the quest page's tap | no Quest page yet (the pager's quest pages are kept) |
 | second and third buff rows | Tears of the Kingdom has one meal effect at a time |
 | weather page | the right pane carries Buffs and Food (spec C25) |
 | sensor ping glyphs, compass card | no sensor-target or nearest-shrine read yet |
@@ -211,7 +249,7 @@ disabled with its reason, nothing requested).
 - A device run in Eden Duo (AYN Thor / Retroid Pocket Duo), and the module's Android build for
   this version.
 - Reads: the time of day (then the clock in the header), temperature (dial and clothing card),
-  quests (left pager, Quest page, quest marks, distance), map pins and stamps, an area name, the
+  quests beyond the left pager (a Quest page, quest marks on the disc), map pins and stamps, an area name, the
   nearest shrine or Lightroot (compass card), the in-shrine state, attack and defence numbers,
   a fused material's maximum fuse durability (then the Fuse arc fills), which effect a meal buff's id stands for (the Buffs row shows a
   plain effect mark), a hearty meal's extra hearts.
@@ -221,8 +259,15 @@ disabled with its reason, nothing requested).
   decode them, and the host loads a module only on a build its `build_ids` lists (MODULE_GUIDE §3:
   a module never implies support for an unlisted build).
 - Languages other than English (US) for item names and descriptions.
-- Item actions in Eden Duo itself (they need guest calls; a load-time helper is the researched
-  route). TotK Native's route is not yet checked on a device through this page.
+- Item actions and the sage switches in Eden Duo itself (they need guest calls; a load-time helper
+  is the researched route). TotK Native's route is not yet checked on a device through this page.
+- To verify on the device before release (read-only checks first): the quest pages against the
+  game's Adventure Log (open quests, the tracked one, a step without its own text, a Complete
+  tracked quest); the destinations' `BlackOutFlag` reading (set = hidden); the quests icon
+  `Nt_PauseIconChL_01^s` exists in the Common layout; each sage's summon and dismiss through TotK
+  Native (the avatar appears or leaves, Key Items shows the same, it survives save and reload, the
+  frame-end thread id matches the item actions'); a dismiss the game only flags (*stays until the
+  next load*).
 
 ## Credits
 

@@ -13,6 +13,10 @@ Tears of the Kingdom's values. So this script does not draw a page of its own. I
     provenance (all of it is Eden Duo-generated, none is game art);
   - identity (spec C04, C38, C60): the Sheikah blue becomes Tears of the Kingdom's teal, "Sheikah Slate" becomes
     "Purah Pad", the wrong-build cover asks for Tears of the Kingdom 1.4.3;
+  - the left pager (owner, 2026-11-18; one option for both games, the "Left panel" row of the runtime's @settings
+    page, flag left_mode, opened by holding the left pager; LEFT_SETTING): "Quest details" (the default) is Breath of
+    the Wild's Main quest / Side quest / Champions pager with Tears of the Kingdom's quests and Sages (the Sages page
+    read-only); "Sage powers" shows only the Sages, each row with an On/Off switch (POWERS, the module's "totk.sage");
   - the Ready minimap is north up unless the player turns it with Link (the "Minimap" row of the runtime's @settings
     page, flag map_rotate, opened by holding the minimap; MAP_SETTING): the module then publishes the turn as Breath of
     the Wild's names (totk.map.view.rotation, totk.map.view.heading), so the map, the arrow and the N badge keep
@@ -70,10 +74,9 @@ def span(a, b):
 READY_DROP = [
     ({0}, 'fx_probe: Breath of the Wild\'s layout-animation loader'),
     (span(11, 30), 'map pins on the disc: no Tears of the Kingdom pin read yet'),
-    (span(31, 45), 'quest marks on the disc: no quest read yet'),
+    (span(31, 45), 'quest marks on the disc: not drawn yet (the quest pages show the distance)'),
     (span(48, 57), 'shrine panel (in a shrine): no in-shrine read yet'),
     ({63}, 'context caption under "Minimap unavailable": Breath of the Wild\'s context names'),
-    ({67} | span(159, 163), 'quest page of the left pager: no quest read yet'),
     (span(70, 73), 'second and third buff rows: Tears of the Kingdom has one meal effect at a time'),
     (span(80, 82) | span(84, 86), 'sensor ping and plus glyphs: no sensor-target read yet (the resting glyph stays)'),
     ({93, 98, 107, 116, 122, 133}, 'corner and well taps: they open the quick picker or cycle gear (no actions)'),
@@ -84,13 +87,11 @@ READY_DROP = [
     ({164, 165}, 'area name and map-marker caption: no area read yet'),
     ({87}, '"Area unavailable" placeholder: owner 2026-11-17, an unknown area shows no caption at all (when an area read '
            'exists, keep 164/165 gated on totk.ready.area.valid and leave this one out)'),
-    ({169}, 'left pager swipes: one left page (Sages) until quests are read'),
     (span(171, 176), 'three-dot right pager: at most two right pages (Buffs, Food)'),
     (span(190, 193), 'attack and defence numbers on the corner cards: not read yet'),
     ({194}, 'view cone: no camera read'),
     ({197}, 'secondary-weapon swap hint: Tears of the Kingdom has no weapon swap (the well carries Fuse)'),
     ({198, 199}, 'arrow up/down hints: arrow selection is not offered'),
-    (span(200, 202) | span(205, 207), 'left pager dots: one left page'),
     (span(218, 220), 'Quest command: no quest page yet (Inventory and Map are centred, spec C28)'),
     (span(233, 238) | span(271, 291) | {293, 572}, 'clothing card: no temperature read yet'),
     ({244, 252, 260, 268}, 'food-card count texts: never shown by Breath of the Wild either'),
@@ -106,6 +107,11 @@ KEEP_RANGES = span(1, 319) | span(572, 592) | span(808, 863)
 # too (TotK Native's local patch), so the app's menu sets both games' minimaps the same way.
 MAP_SETTING = {'flag': 'map_rotate', 'label': 'Minimap', 'type': 'toggle', 'choices': ['North up', 'Rotate with Link'],
                'default': 0}
+# The left pager's setting (owner, 2026-11-18): Quest details (0, the default: Main quest, Side quest and the Sages
+# read-only) or Sage powers (1: the Sages only, each with its On/Off switch). The same flag and order as Breath of the
+# Wild's package (TotK Native's local patch: Quest details / Champion powers), so the app's menu "Left panel" sets both.
+LEFT_SETTING = {'flag': 'left_mode', 'label': 'Left panel', 'type': 'toggle', 'choices': ['Quest details', 'Sage powers'],
+                'default': 0}
 
 # Breath of the Wild's Common layout textures -> Tears of the Kingdom's (Common.Product.140 timg/__Combined.bntx)
 TEX = {
@@ -125,6 +131,9 @@ TEX = {
     'Nt_PauseIconL_02^s': 'IconShield_72x72^s',
     'Nt_PauseIconL_05^s': 'IconCuisine_72x72^s',             # food page bowl -> TotK's cooking pot
     'Nt_HeartNewS_00^d': 'HeartW_00^s',                      # heart (spec section 3)
+    'Nt_PauseIconChL_01^s': 'Nt_PauseIconChL_01^s',          # the quest pages' icon (name as in the Common layout's
+                                                             # Nt_PauseIconCh_* family; not checked against the romfs:
+                                                             # a missing texture leaves the icon blank)
     'Logo2D_00^d': 'Logo_EN_L_Full_00^w',                    # game logo
     'Logo3DGameTitle_00^l': 'Logo_EN_L_Full_00^w',
 }
@@ -176,7 +185,6 @@ RENAME = {
 # Names folded into expressions as constants (and gates on them resolved at build time)
 CONST = {
     'botw.quick.gear': 0, 'botw.quick.touch_rune': 0, 'botw.quick.held_rune': 0,
-    'botw.ready.left.quest': 0, 'botw.ready.left.champions': 1,
     'botw.map.view.cone.valid': 0,
 }
 
@@ -190,7 +198,11 @@ PUBLISHED = [
     r'totk\.ready\.sensor\.(art\.0|ring_palette\.0|text)', r'totk\.ready\.header\.(text|valid)',
     r'totk\.ready\.stamina\.(percent|depleted)', r'totk\.ready\.effects\.count',
     r'totk\.ready\.effect\.0\.(kind|icon|time)',
-    r'totk\.ready\.champions\.count', r'totk\.ready\.champion_slot\.\d\.(icon|tint|display|display_kind)',
+    r'totk\.ready\.champions\.(count|available|note|note\.on)',
+    r'totk\.ready\.champion_slot\.\d\.(icon|tint|display|display_kind)',
+    r'totk\.ready\.champion_slot\.\d\.switch\.(on_tap|off_tap|on_fixed|off_fixed)',
+    r'totk\.ready\.left\.(mode|page|quest|champions|powers|dots)',
+    r'totk\.ready\.quest\.(valid|name|objective|distance|tracked)',
     r'totk\.ready\.heal\.(available|need_text|need_amount_text|empty)',
     r'totk\.ready\.heal\.row\.\d\.(valid|actor|name|count|full|heal_text|has_effect|effect_text|bonus_text)',
     r'totk\.quick\.(open|title|count|empty)', r'totk\.quick\.sel\.(has|name|facts)',
@@ -199,7 +211,7 @@ PUBLISHED = [
     r'totk\.act\.(state|seq|pending|done|refused|failed|reason|line|ready|ready_reason)',
 ]
 # Module actions the pages may name (the module's on_action)
-MODULE_ACTIONS = {'totk.act', 'totk.select'}
+MODULE_ACTIONS = {'totk.act', 'totk.select', 'totk.left', 'totk.sage'}
 # Bound by kept widgets, not read yet: these widgets show Breath of the Wild's empty state ('—', '—°', ...)
 UNREAD = {
     'totk.ready.environment.valid': 'temperature (BR dial shows "—°")',
@@ -299,8 +311,9 @@ def rewrite_widget(w):
             w[k] = COLOURS[w[k].upper()]
     if w.get('text') in TEXTS:
         w['text'] = TEXTS[w['text']]
-    # a text_map of Breath of the Wild msbt hashes: Tears of the Kingdom's module publishes the text itself
-    if 'text_bind' in w and 'text_map' in w:
+    # a text_map of Breath of the Wild msbt hashes: Tears of the Kingdom's module publishes the text itself (a map of
+    # plain words, such as the quest pages' "Main quest" / "Side quest" title, is kept)
+    if 'text_bind' in w and 'text_map' in w and any(str(v).startswith('msbt:') for v in w['text_map'].values()):
         w['bind_text'] = w.pop('text_bind')
         w.pop('text_map')
     return w
@@ -333,8 +346,9 @@ def ready_page(botw, keep_log):
             continue
         by_index[i] = w
         out.extend(w if isinstance(w, list) else [w])
-        if i == 863:   # after the four-row Champions layout: the five-row Sages layout
+        if i == 863:   # after the four-row Champions layout: the five-row Sages layout, then the Sage powers switches
             out.extend(five_sage_rows(src))
+            out.extend(power_switches(src))
     # the gear corners open the quick picker (Breath of the Wild's corner taps), while nothing else is up
     for value, r in QUICK:
         out.append({'type': 'rect', 'rect': r, 'color': '#00000000', 'frame': 0, 'on_tap': f'quick_open_{value}',
@@ -347,6 +361,16 @@ def special(i, w):
     """Per-widget rewrites beyond the table."""
     if i == 4:   # the disc's frame: holding the minimap opens the settings page (north up / rotate with Link)
         w['on_hold'] = 'open_settings'
+        return w
+    if i == 163:   # the quest pages' swipe area: no Quest page to open yet; holding it opens the settings (Left panel)
+        w.pop('on_tap', None)
+        w['on_hold'] = 'open_settings'
+        return w
+    if i == 169:   # the Sages page's swipe area (Quest details) and the whole panel (Sage powers)
+        w['on_hold'] = 'open_settings'
+        return w
+    if i in (205, 206, 207):   # the current page's dot: Quest details only (Sage powers has one page)
+        w['need_bind'] = 'totk.ready.left.dots'
         return w
     if i == 5:   # the minimap: Tears of the Kingdom's tiles on Link's layer, Link centred, north up unless turned
         for k in ('groups', 'label_style'):
@@ -462,7 +486,7 @@ def five_sage_rows(src):
 def five_sage_derived():
     d = []
     for k in range(5):
-        base = 'pp_ready_base == 1 && totk.ready.champions.count == 5'
+        base = 'pp_ready_base == 1 && totk.ready.left.champions == 1 && totk.ready.champions.count == 5'
         kind = f'totk.ready.champion_slot.{k}.display_kind'
         d += [{'name': f'sage5_{k}_row', 'expr': base},
               {'name': f'sage5_{k}_glow_ready', 'expr': f'{base} && {kind} == 1'},
@@ -470,6 +494,65 @@ def five_sage_derived():
               {'name': f'sage5_{k}_count', 'expr': f'{base} && {kind} == 1'},
               {'name': f'sage5_{k}_state', 'expr': f'{base} && {kind} != 1'}]
     return d
+
+
+# Sage powers (LEFT_SETTING 1): an On/Off switch on each Sages row, for every row count (one to four joined sages use
+# Breath of the Wild's Champions layouts, five the layout above). The switch sits under the row's state text, right of
+# the icon; the row's icon box is its tap area. Its four forms are the module's: on_tap / off_tap (a tap summons or
+# dismisses through TotK Native's runtime, "totk.sage" argument row * 2 + 1 / + 0), on_fixed / off_fixed (shown as it
+# is: Eden Duo, or the game does not allow it now; the reason is the line under the panel). Breath of the Wild's own
+# package has the same switches on its Champions rows (TotK Native's local patch).
+POWER_ON, POWER_OFF, POWER_LINE = '#C800B39A', '#A0101416', '#80FFFCC6'
+
+
+def power_rows():
+    """(count, row, icon top) for every Sages layout."""
+    rows = []
+    for count in range(1, 6):
+        for k in range(count):
+            rows.append((count, k, 284 + k * 82 if count == 5 else None))
+    return rows
+
+
+def power_switches(src):
+    by_id = {w.get('id'): w for w in src if w.get('id', '').startswith('champion26_')}
+    out = []
+    for count, k, top in power_rows():
+        y = top if top is not None else by_id[f'champion26_{count}_{k}_icon']['rect'][1]
+        pill = [118, y + 50, 66, 20] if count == 5 else [118, y + 52, 66, 24]
+        for form, text, fill, ink in (('on_tap', 'On', POWER_ON, WHITE), ('off_tap', 'Off', POWER_OFF, INK),
+                                      ('on_fixed', 'On', '#6400B39A', MUTED), ('off_fixed', 'Off', '#64101416', MUTED)):
+            gate = f'ps{count}_{k}_{form}'
+            out.append({'type': 'rect', 'id': f'power{count}_{k}_{form}', 'rect': pill, 'bg': fill, 'color': POWER_LINE,
+                        'frame': 1, 'need_bind': gate})
+            out.append({'type': 'label', 'rect': [pill[0] + pill[2] // 2, pill[1] + 2, pill[2] - 8, 0], 'text': text,
+                        'text_scale': 3, 'color': ink, 'align': 'center', **ITALIC, 'need_bind': gate})
+        for form, want in (('on_tap', 0), ('off_tap', 1)):   # a tap turns it the other way
+            out.append({'type': 'rect', 'rect': [16, y - 6, 184, 82 if count == 5 else 90], 'color': '#00000000',
+                        'frame': 0, 'on_tap': f'sage_power_{k}_{want}', 'need_bind': f'ps{count}_{k}_{form}'})
+    # the line under the panel: what a switch did, why they cannot be used now, or how to use them
+    out.append({'type': 'label', 'rect': [108, 704, 184, 0], 'bind_text': 'totk.ready.champions.note', 'text_scale': 3,
+                'color': MUTED, 'align': 'center', 'wrap_width': 184, 'max_lines': 1, 'fit_text': True,
+                'text_min_scale': 2, **ITALIC, 'need_bind': 'power_note'})
+    return out
+
+
+def power_derived():
+    d = [{'name': 'power_note', 'expr': 'pp_ready_base == 1 && totk.ready.left.powers == 1 && '
+                                        'totk.ready.champions.note.on == 1'}]
+    for count, k, _ in power_rows():
+        for form in ('on_tap', 'off_tap', 'on_fixed', 'off_fixed'):
+            d.append({'name': f'ps{count}_{k}_{form}',
+                      'expr': f'pp_ready_base == 1 && totk.ready.left.powers == 1 && totk.ready.champions.count == '
+                              f'{count} && totk.ready.champion_slot.{k}.switch.{form} == 1'})
+    return d
+
+
+# The page dots of the left pager (Breath of the Wild's 200-202, dimmed, under 205-207, the current one): Quest details
+# only. Their derived gates are Breath of the Wild's with the mode added.
+DOT_GATES = {'pp_ready_underlay_194': 'pp_ready_base == 1 && totk.ready.left.dots == 1',
+             'pp_ready_underlay_195': 'pp_ready_base == 1 && totk.ready.left.dots == 1',
+             'pp_ready_underlay_196': 'pp_ready_base == 1 && totk.ready.left.dots == 1'}
 
 
 def simple_page(botw, pid, drop):
@@ -757,7 +840,7 @@ def derived_entries(botw, pages):
         {'name': 'states_cover', 'terms': [['totk.state.dim', 1]]},
         # the quick picker: open while the module shows it (it gives way to the game's menu, events and loading)
         {'name': 'ui_quick', 'expr': 'totk.quick.open == 1 && totk.state.page == 0'},
-    ] + five_sage_derived()
+    ] + five_sage_derived() + power_derived() + [{'name': n, 'expr': e} for n, e in DOT_GATES.items()]
     defined = {x['name'] for x in ours}
     need = set()
 
@@ -820,6 +903,14 @@ def actions():
     for k in range(3):
         a[f'totk_inv_act_{k}'] = {'kind': 'module', 'action': 'totk.act', 'argument': k, 'haptic': 'confirm'}
     a['totk_quick_act_0'] = {'kind': 'module', 'action': 'totk.act', 'argument': 8, 'haptic': 'confirm'}
+    # the left pager: Main quest, Side quest, Sages (the module's "totk.left"; Quest details only)
+    a['ready_left_next'] = {'kind': 'module', 'action': 'totk.left', 'argument': 1}
+    a['ready_left_previous'] = {'kind': 'module', 'action': 'totk.left', 'argument': -1}
+    # Sage powers: row k's switch (argument k * 2 + 1 summon, + 0 dismiss)
+    for k in range(5):
+        for want in (0, 1):
+            a[f'sage_power_{k}_{want}'] = {'kind': 'module', 'action': 'totk.sage', 'argument': k * 2 + want,
+                                           'haptic': 'confirm'}
     for value, _ in QUICK:
         a[f'quick_open_{value}'] = {'kind': 'flag', 'flag': 'quick', 'value': value}
     a['quick_close'] = {'kind': 'flag', 'flag': 'quick', 'value': 0}
@@ -939,7 +1030,7 @@ def manifest(botw, keep_log):
                  'Ready, main-menu and Loading pages. All game art and text are decoded at runtime from the player\'s '
                  'own romfs by the native module; the package ships none.',
         'flags': {'card': 0, 'right_pane': 0, 'inv_tab': 0, 'inv_sel': -1, 'map_layer': 0, 'quick': 0},
-        'settings': [MAP_SETTING],
+        'settings': [MAP_SETTING, LEFT_SETTING],
         'map': {'areas': {'TotkMini': dict(world, clamp_view=False), 'TotkFull': dict(world, clamp_view=True)},
                 'style': {'background': '#FF000D17'}},
         'actions': actions(),
