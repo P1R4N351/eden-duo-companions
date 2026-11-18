@@ -13,6 +13,10 @@ Tears of the Kingdom's values. So this script does not draw a page of its own. I
     provenance (all of it is Eden Duo-generated, none is game art);
   - identity (spec C04, C38, C60): the Sheikah blue becomes Tears of the Kingdom's teal, "Sheikah Slate" becomes
     "Purah Pad", the wrong-build cover asks for Tears of the Kingdom 1.4.3;
+  - the Ready minimap is north up unless the player turns it with Link (the "Minimap" row of the runtime's @settings
+    page, flag map_rotate, opened by holding the minimap; MAP_SETTING): the module then publishes the turn as Breath of
+    the Wild's names (totk.map.view.rotation, totk.map.view.heading), so the map, the arrow and the N badge keep
+    Breath of the Wild's binds;
   - Breath of the Wild's module actions (quick picker, help, arrow cycling, weapon swap, quests) are dropped; pager and
     card switches become flag actions. The item actions come back as Tears of the Kingdom's own: the Inventory
     detail's action buttons and a quick picker on the three gear corners (QUICK), drawn in Breath of the Wild's style
@@ -95,6 +99,13 @@ READY_DROP = [
 ]
 DROP = set().union(*(s for s, _ in READY_DROP))
 KEEP_RANGES = span(1, 319) | span(572, 592) | span(808, 863)
+
+# The one player setting (runtime 17 "settings": the built-in @settings page, persisted). Breath of the Wild's minimap
+# turns with the camera; Tears of the Kingdom's module reads no camera yaw, so "turn" means Link faces up (the module's
+# PublishMap). North up is the default (owner, 2026-11-17). The flag name is the one Breath of the Wild's package uses
+# too (TotK Native's local patch), so the app's menu sets both games' minimaps the same way.
+MAP_SETTING = {'flag': 'map_rotate', 'label': 'Minimap', 'type': 'toggle', 'choices': ['North up', 'Rotate with Link'],
+               'default': 0}
 
 # Breath of the Wild's Common layout textures -> Tears of the Kingdom's (Common.Product.140 timg/__Combined.bntx)
 TEX = {
@@ -334,7 +345,10 @@ def ready_page(botw, keep_log):
 
 def special(i, w):
     """Per-widget rewrites beyond the table."""
-    if i == 5:   # the minimap: Tears of the Kingdom's tiles on Link's layer, Link centred, north up
+    if i == 4:   # the disc's frame: holding the minimap opens the settings page (north up / rotate with Link)
+        w['on_hold'] = 'open_settings'
+        return w
+    if i == 5:   # the minimap: Tears of the Kingdom's tiles on Link's layer, Link centred, north up unless turned
         for k in ('groups', 'label_style'):
             w.pop(k, None)
         w['area'] = 'TotkMini'
@@ -793,7 +807,9 @@ def actions():
          'right_page': {'kind': 'flag', 'flag': 'right_pane'},
          'card_food': {'kind': 'flag', 'flag': 'card', 'value': 3},
          'card_close': {'kind': 'flag', 'flag': 'card', 'value': 0},
-         'map_recenter': {'kind': 'view_reset', 'view': 'totk_map'}}
+         'map_recenter': {'kind': 'view_reset', 'view': 'totk_map'},
+         'open_settings': {'kind': 'page', 'page': '@settings', 'transition': 'fade', 'duration_ms': 90,
+                           'easing': 'ease_in_out'}}
     for i in range(len(TABS)):
         a[f'inv_tab_{i}'] = {'kind': 'flag', 'flag': 'inv_tab', 'value': i}
     for i in range(MAX_ROWS):
@@ -923,6 +939,7 @@ def manifest(botw, keep_log):
                  'Ready, main-menu and Loading pages. All game art and text are decoded at runtime from the player\'s '
                  'own romfs by the native module; the package ships none.',
         'flags': {'card': 0, 'right_pane': 0, 'inv_tab': 0, 'inv_sel': -1, 'map_layer': 0, 'quick': 0},
+        'settings': [MAP_SETTING],
         'map': {'areas': {'TotkMini': dict(world, clamp_view=False), 'TotkFull': dict(world, clamp_view=True)},
                 'style': {'background': '#FF000D17'}},
         'actions': actions(),

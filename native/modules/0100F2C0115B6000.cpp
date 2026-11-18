@@ -157,6 +157,17 @@ double Num(const json& o, const char* key, double fallback = NAN) {
     const auto it = o.find(key);
     return it != o.end() && it->is_number() ? it->get<double>() : fallback;
 }
+// Degrees clockwise in [0, 360) on a half-degree grid, as Breath of the Wild's turn_degrees (botw_map_view.h): a slow
+// turn moves the minimap's rim a few pixels per step instead of on every tick.
+double Turn(double cw) {
+    if (!std::isfinite(cw) || std::abs(cw) > 1e9)
+        return 0;
+    double d = std::fmod(cw, 360.0);
+    if (d < 0)
+        d += 360.0;
+    d = std::round(d * 2.0) / 2.0;
+    return d >= 360.0 ? d - 360.0 : d + 0.0;
+}
 std::string Str(const json& o, const char* key) {
     const auto it = o.find(key);
     return it != o.end() && it->is_string() ? it->get<std::string>() : std::string{};
@@ -972,10 +983,16 @@ void Module::PublishMap() {
     } else {
         Text("totk.coords", "");
     }
-    // 0 = north, clockwise, as Breath of the Wild's botw.map.view.heading; the minimap stays north up
-    F64("totk.map.heading", Num(pl, "heading", 0));
-    F64("totk.map.view.heading", Num(pl, "heading", 0));
-    I64("totk.map.view.rotation", 0);
+    // 0 = north, clockwise, as Breath of the Wild's botw.map.view.heading. The Ready minimap is north up unless the
+    // player chose to turn it (flag map_rotate = 1: the package's settings row; TotK Native's menu sets it at start).
+    // Then it turns so that Link faces up: Breath of the Wild's turns with the camera, but no camera yaw is read here,
+    // and Link's facing (the reader's "heading", his actor's own rotation) is the nearest value there is (the camera
+    // trails behind him while he runs). The arrow and the N badge turn with the map (view_rotate_bind, rotate_bind).
+    const double heading = Num(pl, "heading", 0);
+    const double turn = Get("@flag:map_rotate", 0) == 1 ? Turn(-heading) : 0.0;
+    F64("totk.map.heading", heading);
+    F64("totk.map.view.heading", turn != 0.0 ? Turn(heading + turn) : heading);
+    F64("totk.map.view.rotation", turn);
     static constexpr std::array<char, 3> Layers{'G', 'S', 'U'};
     const std::string layer = Str(pl, "layer");
     const int follow = layer == "Sky" ? 1 : layer == "UnderGround" ? 2 : 0;

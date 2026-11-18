@@ -16,8 +16,9 @@ own empty state (`—`, `—°`) or is left out (list below).
 ## Pages
 
 - **Ready** (Breath of the Wild's layout):
-  - the round minimap from the game's own map tiles (the finer ones), north up, Link's arrow in the
-    middle, on the layer he is on (Surface, Sky, Depths); the green **stamina ring** round it while
+  - the round minimap from the game's own map tiles (the finer ones), north up (or turning with
+    Link, see *The minimap's turn* below), Link's arrow in the middle, on the layer he is on (Surface,
+    Sky, Depths); the green **stamina ring** round it while
     stamina is not full or Link is out of breath;
   - dials: **Lights of Blessing** (top left), **shrines found** (top right), the sensor (bottom
     left: *Shrine*, *Lightroot* in the Depths), temperature (bottom right: no read yet, `—°`);
@@ -64,6 +65,21 @@ Depths. There is no time-of-day read yet, so the header names the layer everywhe
 returns the time, set the switch and the Surface and Sky show the clock; nothing in the package
 changes.
 
+### The minimap's turn
+
+One setting, on the runtime's own settings page (`settings`, runtime 17; holding the minimap opens
+it): **Minimap: North up** (the default) or **Rotate with Link**. It is the flag `map_rotate`,
+persisted by the runtime like every settings flag. North up keeps the N badge at the top and turns
+only Link's arrow. Rotate with Link turns the map, the N badge (it orbits the disc) and the arrow
+together so that Link faces up. Breath of the Wild's rotating minimap follows the camera; this
+module reads no camera yaw, so Link's facing (his actor's rotation, the reader's `heading`) stands in
+for it: the two agree while he runs and the camera trails him, not while the camera is turned
+alone. The module does the turn (`PublishMap`): it publishes `totk.map.view.rotation` (0 when north
+up) and `totk.map.view.heading` (the arrow on the turned map), the names Breath of the Wild's
+widgets bind, so the page keeps their binds. The full Map page is always north up, as Breath of
+the Wild's. TotK Native and BotW Native set the flag from their own menu (*Graphics → Screen →
+Second screen map*) at every start; the same flag name is in Breath of the Wild's package there.
+
 ## Values
 
 The module publishes Breath of the Wild's names with `totk.` in front (`botw.ready.shield` becomes
@@ -85,7 +101,7 @@ is `totk.ready.fuse.*`.
 | `totk.ready.effect.0.*`, `.effects.count` | `PlayerStatus.CookBuff`, `CookBuffTime` |
 | `totk.ready.heal.*` | life, max life and the food pouch (`LifeRecover`, effect) |
 | `totk.ready.header.text`, `totk.ready.sensor.*` | the layer (see above) |
-| `totk.map.*`, `totk.mini.tile.N`, `totk.coords` | the player actor, `MapData.CurrentLayer` |
+| `totk.map.*`, `totk.mini.tile.N`, `totk.coords` | the player actor, `MapData.CurrentLayer`; `totk.map.view.rotation` / `.view.heading`: the minimap's turn (flag `map_rotate`, see above) |
 | `totk.fx.spin.N` | the loading spinner's dots, as Breath of the Wild's |
 | `totk.quick.*` | the quick picker: open, title, cells (`.N.icon`, `.equipped`, `.selected`, `.durability_pct`, ...), the selection |
 | `totk.inv.act.*`, `totk.quick.act.*` | the selected item's actions: `.count`, per button `.N.on`, `.enabled`, `.disabled`, `.label`, `.reason`, `.reason_text` |
