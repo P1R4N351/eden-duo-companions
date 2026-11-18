@@ -69,7 +69,10 @@ changes.
 
 One setting, on the runtime's own settings page (`settings`, runtime 17; holding the minimap opens
 it): **Minimap: North up** (the default) or **Rotate with Link**. It is the flag `map_rotate`,
-persisted by the runtime like every settings flag. North up keeps the N badge at the top and turns
+persisted by the runtime like every settings flag unless the host decides it: a host may set the
+flag's default and take it out of the persisted set. TotK Native and BotW Native do both: their own
+menu (Graphics, Screen, *Second screen map*) sets it at every start, a change made on this page lasts
+until the game closes, and the page says so under the row. North up keeps the N badge at the top and turns
 only Link's arrow. Rotate with Link turns the map, the N badge (it orbits the disc) and the arrow
 together so that Link faces up. Breath of the Wild's rotating minimap follows the camera; this
 module reads no camera yaw, so Link's facing (his actor's rotation, the reader's `heading`) stands in
